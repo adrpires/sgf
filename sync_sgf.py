@@ -167,9 +167,14 @@ HTML = """<!DOCTYPE html>
   .card strong { font-size:20px; }
   .pay { color:var(--pay); } .rec { color:var(--rec); }
   section { margin-top:18px; }
-  table { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line); border-radius:12px; overflow:hidden; }
-  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); font-size:14px; }
-  th { color:var(--muted); font-weight:600; }
+  label { color:var(--muted); font-size:13px; }
+  input[type="date"] { border:1px solid var(--line); border-radius:8px; padding:6px 8px; font:inherit; }
+  .tabela { overflow:auto; max-height:540px; background:#fff; border:1px solid var(--line); border-radius:12px; }
+  table { width:100%; border-collapse:collapse; background:#fff; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); font-size:13px; white-space:nowrap; }
+  th { color:var(--muted); font-weight:600; position:sticky; top:0; background:#fff; }
+  td.num, th.num { text-align:right; }
+  tr.atipico td { background:#fff7e8; }
   .bars { display:flex; gap:10px; align-items:flex-end; height:180px; background:#fff; border:1px solid var(--line); border-radius:12px; padding:12px; }
   .bar { flex:1; display:flex; gap:3px; align-items:flex-end; height:140px; }
   .bar i { display:block; width:50%; border-radius:4px 4px 0 0; }
@@ -184,87 +189,102 @@ HTML = """<!DOCTYPE html>
   <h1>Painel financeiro SGF</h1>
   <div class="sub" id="meta"></div>
   <div class="row">
-    <button id="prev" type="button">Mês anterior</button>
-    <strong id="mes"></strong>
-    <button id="next" type="button">Próximo mês</button>
+    <label>De <input id="inicio" type="date"></label>
+    <label>Até <input id="fim" type="date"></label>
+    <button id="buscar" type="button">Buscar</button>
   </div>
   <div class="cards">
-    <div class="card"><span>A pagar no mês</span><strong class="pay" id="pagar"></strong></div>
-    <div class="card"><span>A receber no mês</span><strong class="rec" id="receber"></strong></div>
-    <div class="card"><span>Saldo do mês</span><strong id="saldo"></strong></div>
-    <div class="card"><span>Em aberto no mês, com data já passada</span><strong class="pay" id="vencidas"></strong></div>
+    <div class="card"><span>Entradas</span><strong class="rec" id="receber"></strong></div>
+    <div class="card"><span>Saídas</span><strong class="pay" id="pagar"></strong></div>
+    <div class="card"><span>Saldo</span><strong id="saldo"></strong></div>
+    <div class="card"><span>Saídas em aberto</span><strong class="pay" id="abertas"></strong></div>
   </div>
   <section>
-    <h2>Últimos 6 meses</h2>
-    <div class="bars" id="chart"></div>
+    <h2>Entradas</h2>
+    <div class="tabela"><table>
+      <thead><tr><th>Data</th><th>Descrição</th><th>Situação</th><th class="num">Valor</th></tr></thead>
+      <tbody id="entradas"></tbody>
+    </table></div>
   </section>
   <section>
-    <h2>Próximas datas em aberto</h2>
-    <table><thead><tr><th>Data</th><th>Descrição</th><th>Tipo</th><th>Valor</th></tr></thead><tbody id="proximos"></tbody></table>
+    <h2>Saídas</h2>
+    <div class="tabela"><table>
+      <thead><tr><th>Fornecedor</th><th>Documento</th><th>Filial</th><th>Emissão</th><th>Vencimento</th><th class="num">Valor</th><th class="num">Pago</th><th class="num">Juros</th><th>Pagamento</th><th>Observação</th></tr></thead>
+      <tbody id="saidas"></tbody>
+    </table></div>
   </section>
   <section>
     <h2>Saldos das contas</h2>
-    <table><thead><tr><th>Conta</th><th>Saldo</th></tr></thead><tbody id="contas"></tbody></table>
+    <div class="tabela"><table><thead><tr><th>Conta</th><th class="num">Saldo</th></tr></thead><tbody id="contas"></tbody></table></div>
   </section>
   <div class="note" id="nota"></div>
 </main>
 <script>
 const DADOS = __DADOS__;
 const moeda = new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'});
-const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
-let cursor = new Date();
-cursor.setDate(1);
+const titulos = DADOS.titulos || [];
+const vencimentos = titulos.map(item => item.vencimento).filter(Boolean).sort();
 
-function chave(d) { return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0'); }
-function soma(lista) { return lista.reduce((s, item) => s + item.valor, 0); }
-function normais(lista) { return lista.filter(item => !item.atipico); }
+function esc(valor) {
+  return String(valor ?? '').replace(/[&<>"]/g, caractere => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[caractere]));
+}
+function br(data) {
+  if (!data) return '';
+  const partes = data.split('-');
+  return partes[2] + '/' + partes[1] + '/' + partes[0];
+}
+function dentro(data, inicio, fim) { return !!data && data >= inicio && data <= fim; }
+function soma(lista, campo) { return lista.reduce((total, item) => total + (Number(item[campo]) || 0), 0); }
+function moedaOuVazio(valor) { return valor === null || valor === undefined || valor === '' ? '' : moeda.format(valor); }
 
 function render() {
-  const mes = chave(cursor);
-  const doMes = normais(DADOS.linhas.filter(item => (item.data || '').startsWith(mes)));
-  const pagar = soma(doMes.filter(item => item.tipo === 'pagar'));
-  const receber = soma(doMes.filter(item => item.tipo === 'receber'));
-  const hoje = new Date().toISOString().slice(0,10);
-  const vencidas = soma(normais(DADOS.linhas.filter(item => item.status === 'pendente' && item.data < hoje && (item.data || '').startsWith(mes))));
-  document.getElementById('mes').textContent = meses[cursor.getMonth()] + ' ' + cursor.getFullYear();
-  document.getElementById('pagar').textContent = moeda.format(pagar);
-  document.getElementById('receber').textContent = moeda.format(receber);
-  const saldo = receber - pagar;
+  const inicio = document.getElementById('inicio').value;
+  const fim = document.getElementById('fim').value;
+  const entradas = (DADOS.linhas || []).filter(item => item.tipo === 'receber' && !item.atipico && dentro(item.data, inicio, fim));
+  const saidas = titulos.filter(item => dentro(item.vencimento, inicio, fim));
+  const totalEntradas = soma(entradas, 'valor');
+  const totalSaidas = soma(saidas, 'valor');
+  const abertas = saidas.filter(item => !item.pagamento);
+  document.getElementById('receber').textContent = moeda.format(totalEntradas);
+  document.getElementById('pagar').textContent = moeda.format(totalSaidas);
+  const saldo = totalEntradas - totalSaidas;
   const saldoEl = document.getElementById('saldo');
   saldoEl.textContent = moeda.format(saldo);
   saldoEl.className = saldo >= 0 ? 'rec' : 'pay';
-  document.getElementById('vencidas').textContent = moeda.format(vencidas);
+  document.getElementById('abertas').textContent = moeda.format(soma(abertas, 'valor'));
 
-  const pontos = [];
-  for (let i = 5; i >= 0; i--) {
-    const d = new Date(cursor.getFullYear(), cursor.getMonth() - i, 1);
-    const k = chave(d);
-    const lista = normais(DADOS.linhas.filter(item => (item.data || '').startsWith(k)));
-    pontos.push({rotulo: meses[d.getMonth()].slice(0,3), pagar: soma(lista.filter(item => item.tipo === 'pagar')), receber: soma(lista.filter(item => item.tipo === 'receber'))});
-  }
-  const max = Math.max(1, ...pontos.flatMap(p => [p.pagar, p.receber]));
-  document.getElementById('chart').innerHTML = pontos.map(p =>
-    '<div><div class="bar"><i class="p" style="height:' + (p.pagar / max * 100) + '%"></i><i class="r" style="height:' + (p.receber / max * 100) + '%"></i></div><em>' + p.rotulo + '</em></div>'
+  document.getElementById('entradas').innerHTML = entradas.map(item =>
+    '<tr><td>' + br(item.data) + '</td><td>' + esc(item.descricao) + '</td><td>' + (item.status === 'pendente' ? 'Em aberto' : 'Recebida') + '</td><td class="num">' + moeda.format(item.valor) + '</td></tr>'
+  ).join('') || '<tr><td colspan="4">Nenhuma entrada nesse período.</td></tr>';
+
+  document.getElementById('saidas').innerHTML = saidas.map(item =>
+    '<tr class="' + (item.atipico ? 'atipico' : '') + '"><td>' + esc(item.fornecedor) + '</td><td>' + esc(item.documento) + '</td><td>' + esc(item.filial) + '</td><td>' + br(item.emissao) + '</td><td>' + br(item.vencimento) + '</td><td class="num">' + moedaOuVazio(item.valor) + '</td><td class="num">' + (item.atipico ? 'ilegível' : moedaOuVazio(item.pago)) + '</td><td class="num">' + (item.atipico ? '' : moedaOuVazio(item.juros)) + '</td><td>' + (item.pagamento ? br(item.pagamento) : 'Em aberto') + '</td><td>' + esc(item.obs) + '</td></tr>'
+  ).join('') || '<tr><td colspan="10">Nenhuma saída com vencimento nesse período.</td></tr>';
+
+  document.getElementById('contas').innerHTML = (DADOS.contas || []).map(conta =>
+    '<tr><td>' + esc(conta.nome) + '</td><td class="num">' + moeda.format(conta.saldo) + '</td></tr>'
   ).join('');
 
-  const proximos = normais(DADOS.linhas.filter(item => item.status === 'pendente' && item.data >= hoje)).slice(0, 12);
-  document.getElementById('proximos').innerHTML = proximos.map(item =>
-    '<tr><td>' + item.data.split('-').reverse().join('/') + '</td><td>' + item.descricao + '</td><td>' + (item.tipo === 'pagar' ? 'A pagar' : 'A receber') + '</td><td>' + moeda.format(item.valor) + '</td></tr>'
-  ).join('') || '<tr><td colspan="4">Nenhuma data em aberto no período consultado.</td></tr>';
-
-  document.getElementById('contas').innerHTML = DADOS.contas.map(conta =>
-    '<tr><td>' + conta.nome + '</td><td>' + moeda.format(conta.saldo) + '</td></tr>'
-  ).join('');
-
-  const atipicos = DADOS.linhas.filter(item => item.atipico);
-  document.getElementById('meta').textContent = DADOS.filial + ' · atualizado em ' + DADOS.geradoEm.replace('T', ' ');
-  document.getElementById('nota').textContent = atipicos.length
-    ? 'Fora dos totais: ' + atipicos.map(item => item.data + ' ' + item.descricao + ' ' + moeda.format(item.valor)).join('; ') + '. O valor está na API e distorce o mês. Cada linha é o movimento do dia no centro de custo, não uma conta de fornecedor.'
-    : 'Cada linha é o movimento do dia no centro de custo. A API não devolve a conta individual nem o vencimento do título.';
+  const cobertura = vencimentos.length ? br(vencimentos[0]) + ' a ' + br(vencimentos[vencimentos.length - 1]) : 'nenhum relatório importado';
+  document.getElementById('meta').textContent = (DADOS.filial || '') + ' · atualizado em ' + String(DADOS.geradoEm || '').replace('T', ' ');
+  const contasFora = (DADOS.contas || []).filter(conta => Math.abs(conta.saldo) >= 1000000).map(conta => conta.nome);
+  document.getElementById('nota').textContent = 'Entradas são o movimento diário de receita. Saídas são os títulos do relatório, filtrados pelo vencimento. Títulos carregados: ' + cobertura + '.'
+    + (contasFora.length ? ' Saldo fora de escala: ' + contasFora.join(', ') + '.' : '');
 }
 
-document.getElementById('prev').onclick = () => { cursor.setMonth(cursor.getMonth() - 1); render(); };
-document.getElementById('next').onclick = () => { cursor.setMonth(cursor.getMonth() + 1); render(); };
+function isoLocal(data) {
+  const mes = String(data.getMonth() + 1).padStart(2, '0');
+  const dia = String(data.getDate()).padStart(2, '0');
+  return data.getFullYear() + '-' + mes + '-' + dia;
+}
+const inicioEl = document.getElementById('inicio');
+const fimEl = document.getElementById('fim');
+const agora = new Date();
+inicioEl.value = isoLocal(new Date(agora.getFullYear(), agora.getMonth(), 1));
+fimEl.value = isoLocal(agora);
+document.getElementById('buscar').onclick = render;
+inicioEl.onchange = render;
+fimEl.onchange = render;
 render();
 </script>
 </body>
@@ -272,13 +292,21 @@ render();
 """
 
 
+def carregar_titulos():
+    caminho = Path(__file__).resolve().parent / "apoio" / "titulos.json"
+    if not caminho.exists():
+        return []
+    return json.loads(caminho.read_text(encoding="utf-8"))
+
+
 def gravar(payload, filial):
     payload["filial"] = filial
+    payload["titulos"] = carregar_titulos()
     html = HTML.replace("__DADOS__", json.dumps(payload, ensure_ascii=False))
     arquivo = destino()
     arquivo.parent.mkdir(parents=True, exist_ok=True)
     arquivo.write_text(html, encoding="utf-8")
-    print(f"painel {arquivo} linhas={len(payload['linhas'])} contas={len(payload['contas'])}")
+    print(f"painel {arquivo} linhas={len(payload['linhas'])} titulos={len(payload['titulos'])} contas={len(payload['contas'])}")
 
 
 def ciclo(base, user, password, estado):
