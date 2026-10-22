@@ -1,0 +1,25 @@
+services:
+  web:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "${GEFIN_PORT:-8096}:80"
+    volumes:
+      - painel:/usr/share/nginx/html
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+
+  sync:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SGF_OUT: /data/painel_sgf.html
+      SGF_NO_SANDBOX: "1"
+    volumes:
+      - painel:/data
+    shm_size: 1gb
+    depends_on:
+      - web
+
+volumes:
+  painel:

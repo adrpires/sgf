@@ -1,0 +1,5 @@
+.env
+painel_sgf.html
+backup-gestao-financeira-*.json
+api-sgf.pdf
+__pycache__/
