@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block titulo %}Acesso SGF · Painel SGF{% endblock %}
+{% block corpo %}
+<header>
+  <a href="/">Relatório</a>
+  <span>
+    <a href="/usuarios">Usuários</a>
+    <a href="/senha">Senha</a>
+    <form method="post" action="/sair" style="margin:0">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="claro" type="submit" style="margin:0">Sair</button>
+    </form>
+  </span>
+</header>
+<main>
+  <h1>Acesso à consulta SGF</h1>
+  <p>Este é o usuário do sistema da farmácia, usado para buscar os dados. A senha do painel continua na tela Senha.</p>
+  {% if erro %}<div class="erro">{{ erro }}</div>{% endif %}
+  {% if aviso %}<div class="aviso">{{ aviso }}</div>{% endif %}
+  <form class="card" method="post">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Usuário no SGF</label>
+    <input name="usuario" autocomplete="off" required maxlength="40" value="{{ usuario_sgf }}">
+    <label>Nova senha no SGF</label>
+    <input name="senha" type="password" autocomplete="new-password">
+    <label>Confirmar nova senha</label>
+    <input name="confirmar" type="password" autocomplete="new-password">
+    <p>Deixe a senha em branco para manter a atual.</p>
+    <button type="submit">Salvar</button>
+  </form>
+</main>
+{% endblock %}

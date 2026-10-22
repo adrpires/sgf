@@ -1,8 +1,10 @@
 import html
+import json
 import os
 import re
 import secrets
 import sqlite3
+import time
 from pathlib import Path
 
 from flask import Flask, redirect, render_template, request, session
@@ -11,6 +13,9 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 PAINEL = Path(os.environ.get("GEFIN_PAINEL", Path(__file__).with_name("painel_sgf.html")))
 DB = Path(os.environ.get("GEFIN_DB", Path(__file__).with_name("usuarios.db")))
+CONTROLE = Path(os.environ.get("GEFIN_CONTROLE", Path(__file__).with_name("controle")))
+AGUARDAR_SYNC = os.environ.get("GEFIN_AGUARDAR_SYNC") == "1"
+SYNC_TIMEOUT = 150
 LOGIN_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,39}$")
 
 app = Flask(__name__)
@@ -110,6 +115,57 @@ def csrf_ok():
     return secrets.compare_digest(enviado, session.get("csrf", ""))
 
 
+def gravar_json(caminho, dados):
+    caminho.parent.mkdir(parents=True, exist_ok=True)
+    temporario = caminho.with_suffix(".tmp")
+    temporario.write_text(json.dumps(dados), encoding="utf-8")
+    os.replace(temporario, caminho)
+
+
+def ler_json(caminho):
+    if not caminho.exists():
+        return {}
+    try:
+        dados = json.loads(caminho.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return dados if isinstance(dados, dict) else {}
+
+
+def credenciais_sgf():
+    dados = ler_json(CONTROLE / "sgf.json")
+    usuario = str(dados.get("user") or os.environ.get("SGF_USER", "")).strip()
+    return usuario, bool(dados.get("password") or os.environ.get("SGF_PASS"))
+
+
+def salvar_credenciais_sgf(usuario, senha):
+    atual = ler_json(CONTROLE / "sgf.json")
+    if not senha:
+        senha = atual.get("password") or os.environ.get("SGF_PASS", "")
+    if not senha:
+        return "Informe a senha do SGF."
+    gravar_json(CONTROLE / "sgf.json", {"user": usuario, "password": senha})
+    return ""
+
+
+def pedir_sincronizacao():
+    if not AGUARDAR_SYNC:
+        return {"ok": True}
+    antes = PAINEL.stat().st_mtime_ns if PAINEL.exists() else 0
+    pedido_id = secrets.token_hex(8)
+    gravar_json(CONTROLE / "pedido.json", {"id": pedido_id})
+    limite = time.time() + SYNC_TIMEOUT
+    feito_caminho = CONTROLE / "feito.json"
+    while time.time() < limite:
+        feito = ler_json(feito_caminho)
+        if feito.get("id") == pedido_id:
+            return feito
+        if PAINEL.exists() and PAINEL.stat().st_mtime_ns > antes and feito.get("ok"):
+            return feito
+        time.sleep(0.4)
+    return {"ok": False}
+
+
 def exigir_login():
     usuario = usuario_atual()
     if not usuario:
@@ -170,6 +226,7 @@ def login_post():
     session.permanent = True
     session["uid"] = usuario["id"]
     session["csrf"] = secrets.token_urlsafe(32)
+    session["sync"] = pedir_sincronizacao()
     return redirect("/")
 
 
@@ -185,6 +242,7 @@ def painel():
     usuario, resposta = exigir_login()
     if resposta:
         return resposta
+    resultado = session.pop("sync", None) or pedir_sincronizacao()
     if not PAINEL.exists():
         conteudo = "<!DOCTYPE html><html lang='pt-BR'><body><p>O relatório ainda está sendo gerado.</p></body></html>"
     else:
@@ -194,13 +252,20 @@ def painel():
         'gap:12px;align-items:center;padding:10px 16px;background:#102033;color:#fff;'
         'font:14px/1.3 system-ui,Segoe UI,sans-serif">'
         f"<span>{html.escape(usuario['nome'])}</span><span style=\"display:flex;gap:14px;align-items:center\">"
-        + ('<a style="color:#fff" href="/usuarios">Usuários</a>' if usuario["admin"] else "")
+        + ('<a style="color:#fff" href="/usuarios">Usuários</a><a style="color:#fff" href="/consulta">Acesso SGF</a>' if usuario["admin"] else "")
         + '<a style="color:#fff" href="/senha">Senha</a>'
         + '<form method="post" action="/sair" style="margin:0">'
         + f'<input type="hidden" name="csrf" value="{html.escape(garantir_csrf())}">'
         + '<button style="border:1px solid #fff;background:transparent;color:#fff;border-radius:8px;padding:4px 10px;cursor:pointer" type="submit">Sair</button>'
         + "</form></span></div>"
     )
+    if not resultado.get("ok", True):
+        barra += (
+            '<div style="background:#fff7e8;color:#102033;padding:8px 16px;'
+            'font:14px/1.4 system-ui,Segoe UI,sans-serif">'
+            "Não foi possível atualizar agora. Os dados exibidos são da última consulta concluída."
+            "</div>"
+        )
     if "<body>" in conteudo:
         conteudo = conteudo.replace("<body>", "<body>" + barra, 1)
     else:
@@ -350,6 +415,55 @@ def usuario_editar_post(usuario_id):
             )
     session["aviso"] = "Usuário atualizado."
     return redirect(f"/usuarios/{alvo['id']}")
+
+
+@app.get("/consulta")
+def consulta_form():
+    usuario, resposta = exigir_login()
+    if resposta:
+        return resposta
+    if not usuario["admin"]:
+        return redirect("/")
+    usuario_sgf, _senha_definida = credenciais_sgf()
+    return render_template(
+        "consulta.html",
+        erro="",
+        aviso=session.pop("aviso", ""),
+        usuario_sgf=usuario_sgf,
+        csrf=garantir_csrf(),
+    )
+
+
+@app.post("/consulta")
+def consulta_post():
+    usuario, resposta = exigir_login()
+    if resposta:
+        return resposta
+    if not usuario["admin"] or not csrf_ok():
+        return redirect("/")
+    usuario_sgf = request.form.get("usuario", "").strip()
+    senha = request.form.get("senha", "")
+    confirmar = request.form.get("confirmar", "")
+    erro = ""
+    if not usuario_sgf or len(usuario_sgf) > 40 or any(c in usuario_sgf for c in "\r\n\t"):
+        erro = "Informe o usuário do SGF."
+    elif senha or confirmar:
+        if senha != confirmar:
+            erro = "A confirmação da senha não confere."
+        elif not senha.strip():
+            erro = "Informe a senha do SGF."
+    if not erro:
+        erro = salvar_credenciais_sgf(usuario_sgf, senha)
+    if erro:
+        return render_template(
+            "consulta.html",
+            erro=erro,
+            aviso="",
+            usuario_sgf=usuario_sgf,
+            csrf=garantir_csrf(),
+        )
+    session["aviso"] = "Acesso da consulta atualizado. A próxima abertura do relatório usa esse login."
+    return redirect("/consulta")
 
 
 @app.get("/senha")

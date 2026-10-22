@@ -8,3 +8,4 @@ usuarios.db
 usuarios.db-*
 secret.key
 certs/
+controle/

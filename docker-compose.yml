@@ -22,10 +22,13 @@ services:
     environment:
       GEFIN_PAINEL: /data/painel_sgf.html
       GEFIN_DB: /usuarios/usuarios.db
+      GEFIN_CONTROLE: /controle
+      GEFIN_AGUARDAR_SYNC: "1"
       GEFIN_COOKIE_SECURE: "1"
     volumes:
       - painel:/data:ro
       - usuarios:/usuarios
+      - controle:/controle
 
   sync:
     build: .
@@ -33,9 +36,11 @@ services:
     env_file: .env
     environment:
       SGF_OUT: /data/painel_sgf.html
+      SGF_CONTROLE: /controle
       SGF_NO_SANDBOX: "1"
     volumes:
       - painel:/data
+      - controle:/controle
     shm_size: 1gb
     depends_on:
       - web
@@ -43,3 +48,4 @@ services:
 volumes:
   painel:
   usuarios:
+  controle:
