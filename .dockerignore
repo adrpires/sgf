@@ -4,3 +4,7 @@ backup-gestao-financeira-2026-10-06.json
 api-sgf.pdf
 gestao_financeira_premium.html
 .git
+usuarios.db
+usuarios.db-*
+secret.key
+certs/

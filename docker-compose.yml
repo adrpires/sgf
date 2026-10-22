@@ -1,12 +1,31 @@
 services:
   web:
-    image: nginx:1.27-alpine
+    build:
+      context: .
+      dockerfile: Dockerfile.web
     restart: unless-stopped
     ports:
-      - "${GEFIN_PORT:-8096}:80"
+      - "${GEFIN_PORT:-8096}:443"
+    environment:
+      GEFIN_SSL_CN: ${GEFIN_SSL_CN:-apsitelecom.com.br}
     volumes:
-      - painel:/usr/share/nginx/html
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certs:/certs-in:ro
+    depends_on:
+      - app
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      GEFIN_PAINEL: /data/painel_sgf.html
+      GEFIN_DB: /usuarios/usuarios.db
+      GEFIN_COOKIE_SECURE: "1"
+    volumes:
+      - painel:/data:ro
+      - usuarios:/usuarios
 
   sync:
     build: .
@@ -23,3 +42,4 @@ services:
 
 volumes:
   painel:
+  usuarios:

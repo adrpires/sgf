@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block titulo %}Usuários · Painel SGF{% endblock %}
+{% block corpo %}
+<header>
+  <a href="/">Relatório</a>
+  <span>
+    <a href="/senha">Senha</a>
+    <form method="post" action="/sair" style="margin:0">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="claro" type="submit" style="margin:0">Sair</button>
+    </form>
+  </span>
+</header>
+<main>
+  <h1>Usuários</h1>
+  {% if aviso %}<div class="aviso">{{ aviso }}</div>{% endif %}
+  <p><a class="botao" href="/usuarios/novo">Novo usuário</a></p>
+  <table>
+    <thead><tr><th>Nome</th><th>Usuário</th><th>Perfil</th><th>Situação</th><th></th></tr></thead>
+    <tbody>
+    {% for item in usuarios %}
+      <tr>
+        <td>{{ item.nome }}</td>
+        <td>{{ item.login }}</td>
+        <td>{{ "Administrador" if item.admin else "Consulta" }}</td>
+        <td>{{ "Ativo" if item.ativo else "Inativo" }}</td>
+        <td><a href="/usuarios/{{ item.id }}">Editar</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</main>
+{% endblock %}

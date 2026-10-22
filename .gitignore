@@ -5,3 +5,7 @@ api-sgf.pdf
 apoio/*.pdf
 apoio/titulos.json
 __pycache__/
+usuarios.db
+usuarios.db-*
+secret.key
+certs/

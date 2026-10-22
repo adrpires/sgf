@@ -1,1 +1,2 @@
 entrypoint.sh text eol=lf
+nginx-entrypoint.sh text eol=lf

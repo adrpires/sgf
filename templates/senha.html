@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block titulo %}Senha · Painel SGF{% endblock %}
+{% block corpo %}
+<header>
+  <a href="/">Relatório</a>
+  <span>
+    {% if admin %}<a href="/usuarios">Usuários</a>{% endif %}
+    <form method="post" action="/sair" style="margin:0">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="claro" type="submit" style="margin:0">Sair</button>
+    </form>
+  </span>
+</header>
+<main>
+  <h1>Alterar senha</h1>
+  {% if erro %}<div class="erro">{{ erro }}</div>{% endif %}
+  {% if aviso %}<div class="aviso">{{ aviso }}</div>{% endif %}
+  <form class="card" method="post">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Senha atual</label>
+    <input name="atual" type="password" autocomplete="current-password" required>
+    <label>Nova senha</label>
+    <input name="senha" type="password" autocomplete="new-password" required>
+    <label>Confirmar nova senha</label>
+    <input name="confirmar" type="password" autocomplete="new-password" required>
+    <button type="submit">Salvar</button>
+  </form>
+</main>
+{% endblock %}
