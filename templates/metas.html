@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block titulo %}Metas · Painel SGF{% endblock %}
+{% block corpo %}
+<header>
+  <a href="/">Relatório</a>
+  <span>
+    <a href="/usuarios">Usuários</a>
+    <a href="/consulta">Acesso SGF</a>
+    <a href="/senha">Senha</a>
+    <form method="post" action="/sair" style="margin:0">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="claro" type="submit" style="margin:0">Sair</button>
+    </form>
+  </span>
+</header>
+<main>
+  <h1>Metas por categoria</h1>
+  <p>A meta vale para o período escolhido no relatório. Receita atingida fica verde. Despesa atingida fica vermelha.</p>
+  {% if erro %}<div class="erro">{{ erro }}</div>{% endif %}
+  {% if aviso %}<div class="aviso">{{ aviso }}</div>{% endif %}
+  <form class="card" method="post">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Tipo</label>
+    <select name="tipo">
+      <option value="receber">Receita</option>
+      <option value="pagar">Despesa</option>
+    </select>
+    <label>Categoria</label>
+    <input name="categoria" list="categorias" required maxlength="80" placeholder="Como aparece no relatório">
+    <datalist id="categorias">
+      {% for item in categorias %}
+      <option value="{{ item.descricao }}">{{ "Receita" if item.tipo == "receber" else "Despesa" }}</option>
+      {% endfor %}
+    </datalist>
+    <label>Meta (R$)</label>
+    <input name="valor" required inputmode="decimal" placeholder="0,00">
+    <button type="submit">Salvar</button>
+  </form>
+  <table style="margin-top:16px">
+    <thead><tr><th>Tipo</th><th>Categoria</th><th>Meta</th><th></th></tr></thead>
+    <tbody>
+    {% for item in metas %}
+      <tr>
+        <td>{{ "Receita" if item.tipo == "receber" else "Despesa" }}</td>
+        <td>{{ item.categoria }}</td>
+        <td>{{ moeda(item.valor) }}</td>
+        <td>
+          <form method="post" action="/metas/{{ item.id }}/excluir" style="margin:0">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button class="claro" type="submit" style="margin:0">Excluir</button>
+          </form>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4">Nenhuma meta definida.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</main>
+{% endblock %}

@@ -5,9 +5,10 @@ import re
 import secrets
 import sqlite3
 import time
+from datetime import datetime
 from pathlib import Path
 
-from flask import Flask, redirect, render_template, request, session
+from flask import Flask, jsonify, redirect, render_template, request, session
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -39,6 +40,17 @@ def preparar():
             app.secret_key = secrets.token_hex(32)
             chave.write_text(app.secret_key, encoding="utf-8")
     with conectar() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS metas (
+                id INTEGER PRIMARY KEY,
+                tipo TEXT NOT NULL,
+                categoria TEXT NOT NULL,
+                valor REAL NOT NULL,
+                UNIQUE(tipo, categoria)
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS usuarios (
@@ -166,6 +178,64 @@ def pedir_sincronizacao():
     return {"ok": False}
 
 
+def listar_metas():
+    with conectar() as conn:
+        linhas = conn.execute("SELECT tipo, categoria, valor FROM metas ORDER BY tipo, categoria").fetchall()
+    return [{"tipo": item["tipo"], "categoria": item["categoria"], "valor": item["valor"]} for item in linhas]
+
+
+def listar_metas_admin():
+    with conectar() as conn:
+        return conn.execute("SELECT * FROM metas ORDER BY tipo, categoria").fetchall()
+
+
+def categorias_painel():
+    if not PAINEL.exists():
+        return []
+    texto = PAINEL.read_text(encoding="utf-8")
+    marca = "const DADOS = "
+    inicio = texto.find(marca)
+    if inicio < 0:
+        return []
+    try:
+        dados, _ = json.JSONDecoder().raw_decode(texto[inicio + len(marca) :])
+    except json.JSONDecodeError:
+        return []
+    vistas = []
+    chaves = set()
+    for item in dados.get("linhas") or []:
+        if item.get("atipico"):
+            continue
+        tipo = item.get("tipo")
+        descricao = str(item.get("descricao") or "").strip()
+        chave = (tipo, descricao)
+        if tipo in {"receber", "pagar"} and descricao and chave not in chaves:
+            chaves.add(chave)
+            vistas.append({"tipo": tipo, "descricao": descricao})
+    vistas.sort(key=lambda item: (item["tipo"], item["descricao"]))
+    return vistas
+
+
+def valor_br(texto):
+    texto = (texto or "").strip().replace("R$", "").strip()
+    if not texto:
+        return None
+    if "," in texto:
+        texto = texto.replace(".", "").replace(",", ".")
+    try:
+        valor = round(float(texto), 2)
+    except ValueError:
+        return None
+    if valor <= 0:
+        return None
+    return valor
+
+
+def moeda_br(valor):
+    texto = f"{float(valor):,.2f}"
+    return "R$ " + texto.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
 def exigir_login():
     usuario = usuario_atual()
     if not usuario:
@@ -252,7 +322,7 @@ def painel():
         'gap:12px;align-items:center;padding:10px 16px;background:#102033;color:#fff;'
         'font:14px/1.3 system-ui,Segoe UI,sans-serif">'
         f"<span>{html.escape(usuario['nome'])}</span><span style=\"display:flex;gap:14px;align-items:center\">"
-        + ('<a style="color:#fff" href="/usuarios">Usuários</a><a style="color:#fff" href="/consulta">Acesso SGF</a>' if usuario["admin"] else "")
+        + ('<a style="color:#fff" href="/usuarios">Usuários</a><a style="color:#fff" href="/metas">Metas</a><a style="color:#fff" href="/consulta">Acesso SGF</a>' if usuario["admin"] else "")
         + '<a style="color:#fff" href="/senha">Senha</a>'
         + '<form method="post" action="/sair" style="margin:0">'
         + f'<input type="hidden" name="csrf" value="{html.escape(garantir_csrf())}">'
@@ -266,11 +336,40 @@ def painel():
             "Não foi possível atualizar agora. Os dados exibidos são da última consulta concluída."
             "</div>"
         )
+    conteudo = conteudo.replace("__METAS__", json.dumps(listar_metas(), ensure_ascii=False), 1)
     if "<body>" in conteudo:
         conteudo = conteudo.replace("<body>", "<body>" + barra, 1)
     else:
         conteudo = barra + conteudo
     return conteudo
+
+
+@app.get("/saidas")
+def saidas():
+    _usuario, resposta = exigir_login()
+    if resposta:
+        return resposta
+    inicio = request.args.get("inicio", "")
+    fim = request.args.get("fim", "")
+    try:
+        ini = datetime.strptime(inicio, "%Y-%m-%d")
+        final = datetime.strptime(fim, "%Y-%m-%d")
+    except ValueError:
+        return jsonify({"ok": False, "titulos": []}), 400
+    if final < ini or (final - ini).days > 400:
+        return jsonify({"ok": False, "titulos": []}), 400
+    if not AGUARDAR_SYNC:
+        return jsonify({"ok": False, "titulos": []})
+    pedido_id = secrets.token_hex(8)
+    gravar_json(CONTROLE / "relatorio.json", {"id": pedido_id, "inicio": inicio, "fim": fim})
+    limite = time.time() + SYNC_TIMEOUT
+    feito_caminho = CONTROLE / "relatorio-feito.json"
+    while time.time() < limite:
+        feito = ler_json(feito_caminho)
+        if feito.get("id") == pedido_id:
+            return jsonify({"ok": bool(feito.get("ok")), "titulos": feito.get("titulos") or []})
+        time.sleep(0.4)
+    return jsonify({"ok": False, "titulos": []})
 
 
 @app.get("/usuarios")
@@ -464,6 +563,76 @@ def consulta_post():
         )
     session["aviso"] = "Acesso da consulta atualizado. A próxima abertura do relatório usa esse login."
     return redirect("/consulta")
+
+
+@app.get("/metas")
+def metas_form():
+    usuario, resposta = exigir_login()
+    if resposta:
+        return resposta
+    if not usuario["admin"]:
+        return redirect("/")
+    return render_template(
+        "metas.html",
+        erro="",
+        aviso=session.pop("aviso", ""),
+        metas=listar_metas_admin(),
+        categorias=categorias_painel(),
+        moeda=moeda_br,
+        csrf=garantir_csrf(),
+    )
+
+
+@app.post("/metas")
+def metas_post():
+    usuario, resposta = exigir_login()
+    if resposta:
+        return resposta
+    if not usuario["admin"] or not csrf_ok():
+        return redirect("/")
+    tipo = request.form.get("tipo", "")
+    categoria = request.form.get("categoria", "").strip()
+    valor = valor_br(request.form.get("valor", ""))
+    erro = ""
+    if tipo not in {"receber", "pagar"}:
+        erro = "Escolha receita ou despesa."
+    elif not categoria or len(categoria) > 80:
+        erro = "Informe a categoria."
+    elif valor is None:
+        erro = "Informe a meta com um valor maior que zero."
+    if erro:
+        return render_template(
+            "metas.html",
+            erro=erro,
+            aviso="",
+            metas=listar_metas_admin(),
+            categorias=categorias_painel(),
+            moeda=moeda_br,
+            csrf=garantir_csrf(),
+        )
+    with conectar() as conn:
+        conn.execute(
+            """
+            INSERT INTO metas (tipo, categoria, valor) VALUES (?, ?, ?)
+            ON CONFLICT(tipo, categoria) DO UPDATE SET valor = excluded.valor
+            """,
+            (tipo, categoria, valor),
+        )
+    session["aviso"] = "Meta salva."
+    return redirect("/metas")
+
+
+@app.post("/metas/<int:meta_id>/excluir")
+def metas_excluir(meta_id):
+    usuario, resposta = exigir_login()
+    if resposta:
+        return resposta
+    if not usuario["admin"] or not csrf_ok():
+        return redirect("/")
+    with conectar() as conn:
+        conn.execute("DELETE FROM metas WHERE id = ?", (meta_id,))
+    session["aviso"] = "Meta excluída."
+    return redirect("/metas")
 
 
 @app.get("/senha")

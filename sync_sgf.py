@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -197,6 +198,10 @@ HTML = """<!DOCTYPE html>
   td.num, th.num { text-align:right; }
   tr.atipico td { background:#fff7e8; }
   .note { background:#fff7e8; border:1px solid #f0d7a2; border-radius:10px; padding:10px 12px; margin-top:12px; }
+  .alerta { border-radius:12px; padding:10px 12px; margin:0 0 8px; font-weight:700; }
+  .alerta-verde { background:#e7f6ee; border:1px solid #059669; color:#067647; }
+  .alerta-vermelho { background:#fde8e6; border:1px solid #dc2626; color:#b42318; }
+  #alertas:empty { display:none; }
   @media (max-width:800px) { .cards { grid-template-columns:1fr 1fr; } }
 </style>
 </head>
@@ -214,6 +219,7 @@ HTML = """<!DOCTYPE html>
     <label>Até <input id="fim" type="date"></label>
     <button id="buscar" type="button">Buscar</button>
   </div>
+  <div id="alertas"></div>
   <div class="cards">
     <div class="card"><span>Entradas</span><strong class="rec" id="receber"></strong></div>
     <div class="card"><span>Saídas</span><strong class="pay" id="pagar"></strong></div>
@@ -251,9 +257,13 @@ HTML = """<!DOCTYPE html>
 </main>
 <script>
 const DADOS = __DADOS__;
+const METAS = __METAS__;
 const moeda = new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'});
-const titulos = DADOS.titulos || [];
-const vencimentos = titulos.map(item => item.vencimento).filter(Boolean).sort();
+let titulos = [];
+let periodoPronto = '';
+let consultaAndamento = '';
+let falhaPeriodo = '';
+let geracaoConsulta = 0;
 const meses = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
 
 function esc(valor) {
@@ -310,23 +320,64 @@ function renderGrafico(fim) {
   }).join('');
 }
 
+function renderAlertas(inicio, fim) {
+  const caixa = document.getElementById('alertas');
+  if (!caixa) return;
+  caixa.innerHTML = (METAS || []).map(meta => {
+    const total = soma((DADOS.linhas || []).filter(item => !item.atipico && item.tipo === meta.tipo && item.descricao === meta.categoria && dentro(item.data, inicio, fim)), 'valor');
+    if (total < Number(meta.valor)) return '';
+    const receita = meta.tipo === 'receber';
+    return '<div class="alerta ' + (receita ? 'alerta-verde' : 'alerta-vermelho') + '">'
+      + (receita ? 'Meta de receita atingida' : 'Meta de despesa atingida')
+      + ': ' + esc(meta.categoria) + ' · ' + moeda.format(total) + ' de ' + moeda.format(Number(meta.valor)) + '</div>';
+  }).join('');
+}
+
 function render() {
   const inicio = document.getElementById('inicio').value;
   const fim = document.getElementById('fim').value;
+  renderAlertas(inicio, fim);
+  const chave = inicio + '|' + fim;
+  if (inicio && fim && chave !== periodoPronto && consultaAndamento !== chave) {
+    consultaAndamento = chave;
+    const geracao = ++geracaoConsulta;
+    titulos = [];
+    const aviso = document.getElementById('tituloSaidas');
+    if (aviso) aviso.innerHTML = 'Saídas <em>Consultando o relatório no SGF...</em>';
+    fetch('/saidas?inicio=' + encodeURIComponent(inicio) + '&fim=' + encodeURIComponent(fim))
+      .then(resposta => resposta.json())
+      .then(dados => {
+        if (geracao !== geracaoConsulta) return;
+        titulos = (dados && dados.ok) ? (dados.titulos || []) : [];
+        falhaPeriodo = (dados && dados.ok) ? '' : chave;
+        periodoPronto = chave;
+      })
+      .catch(() => {
+        if (geracao !== geracaoConsulta) return;
+        titulos = [];
+        falhaPeriodo = chave;
+        periodoPronto = chave;
+      })
+      .finally(() => { if (geracao === geracaoConsulta) { consultaAndamento = ''; render(); } });
+  }
   const entradas = linhasDoPeriodo('receber', inicio, fim);
-  const saidasDiarias = linhasDoPeriodo('pagar', inicio, fim);
-  const saidasTitulos = titulos.filter(item => dentro(item.vencimento, inicio, fim));
-  const usarTitulos = saidasTitulos.length > 0;
+  const saidasTitulos = (periodoPronto === chave ? titulos : []).filter(item => dentro(item.vencimento, inicio, fim));
+  const usarTitulos = periodoPronto === chave;
   const totalEntradas = soma(entradas, 'valor');
-  const totalSaidas = usarTitulos ? soma(saidasTitulos, 'valor') : soma(saidasDiarias, 'valor');
-  const abertas = usarTitulos ? saidasTitulos.filter(item => !item.pagamento) : saidasDiarias.filter(item => item.status === 'pendente');
+  const totalSaidas = soma(saidasTitulos, 'valor');
+  const abertas = saidasTitulos.filter(item => !item.pagamento);
   document.getElementById('receber').textContent = moeda.format(totalEntradas);
-  document.getElementById('pagar').textContent = moeda.format(totalSaidas);
+  document.getElementById('pagar').textContent = usarTitulos ? moeda.format(totalSaidas) : '...';
   const saldo = totalEntradas - totalSaidas;
   const saldoEl = document.getElementById('saldo');
-  saldoEl.textContent = moeda.format(saldo);
-  saldoEl.className = saldo >= 0 ? 'rec' : 'pay';
-  document.getElementById('abertas').textContent = moeda.format(soma(abertas, 'valor'));
+  if (usarTitulos) {
+    saldoEl.textContent = moeda.format(saldo);
+    saldoEl.className = saldo >= 0 ? 'rec' : 'pay';
+  } else {
+    saldoEl.textContent = '...';
+    saldoEl.className = '';
+  }
+  document.getElementById('abertas').textContent = usarTitulos ? moeda.format(soma(abertas, 'valor')) : '...';
   renderGrafico(fim);
 
   document.getElementById('entradas').innerHTML = agrupar(entradas).map(item =>
@@ -335,18 +386,22 @@ function render() {
 
   const titulo = document.getElementById('tituloSaidas');
   const tabela = document.getElementById('tabelaSaidas');
-  if (usarTitulos) {
+  if (usarTitulos && falhaPeriodo === chave) {
+    titulo.innerHTML = 'Saídas <em>A consulta no SGF não concluiu</em>';
+    tabela.innerHTML = '<tbody><tr><td colspan="10">Não foi possível ler o relatório deste período. Tente buscar de novo.</td></tr></tbody>';
+  } else if (usarTitulos) {
     titulo.innerHTML = 'Saídas <em>Origem é a filial, destino é quem recebeu</em>';
     tabela.innerHTML = '<thead><tr><th>Origem</th><th>Destino</th><th>Documento</th><th>Emissão</th><th>Vencimento</th><th class="num">Valor</th><th class="num">Pago</th><th class="num">Juros</th><th>Pagamento</th><th>Observação</th></tr></thead><tbody>'
-      + saidasTitulos.map(item =>
+      + (saidasTitulos.map(item =>
         '<tr class="' + (item.atipico ? 'atipico' : '') + '"><td>' + (item.filial ? 'Filial ' + esc(item.filial) : '') + '</td><td>' + esc(item.fornecedor) + '</td><td>' + esc(item.documento) + '</td><td>' + br(item.emissao) + '</td><td>' + br(item.vencimento) + '</td><td class="num">' + moedaOuVazio(item.valor) + '</td><td class="num">' + (item.atipico ? 'ilegível' : moedaOuVazio(item.pago)) + '</td><td class="num">' + (item.atipico ? '' : moedaOuVazio(item.juros)) + '</td><td>' + (item.pagamento ? br(item.pagamento) : 'Em aberto') + '</td><td>' + esc(item.obs) + '</td></tr>'
-      ).join('') + '</tbody>';
+      ).join('') || '<tr><td colspan="10">Nenhuma saída nesse período.</td></tr>') + '</tbody>';
+  } else if (consultaAndamento === inicio + '|' + fim) {
+    titulo.innerHTML = 'Saídas <em>Consultando o relatório no SGF...</em>';
+    tabela.innerHTML = '<tbody><tr><td>Aguardando a consulta do período no site.</td></tr></tbody>';
   } else {
     titulo.innerHTML = 'Saídas <em>Paga e em aberto no mesmo dia</em>';
     tabela.innerHTML = '<thead><tr><th>Data</th><th>Descrição</th><th class="num">Paga</th><th class="num">Em aberto</th><th class="num">Total</th></tr></thead><tbody>'
-      + (agrupar(saidasDiarias).map(item =>
-        '<tr><td>' + br(item.data) + '</td><td>' + esc(item.descricao) + '</td><td class="num pay">' + moeda.format(item.baixado) + '</td><td class="num">' + moeda.format(item.aberto) + '</td><td class="num">' + moeda.format(item.baixado + item.aberto) + '</td></tr>'
-      ).join('') || '<tr><td colspan="5">Nenhuma saída nesse período.</td></tr>') + '</tbody>';
+      + '<tr><td colspan="5">Nenhuma saída nesse período.</td></tr></tbody>';
   }
 
   document.getElementById('contas').innerHTML = (DADOS.contas || []).map(conta =>
@@ -356,11 +411,12 @@ function render() {
   document.getElementById('meta').textContent = (DADOS.filial || '') + ' · atualizado em ' + String(DADOS.geradoEm || '').replace('T', ' ');
   const contasFora = (DADOS.contas || []).filter(conta => Math.abs(conta.saldo) >= 1000000).map(conta => conta.nome);
   let nota = 'O SGF separa cada dia em duas partes: o que já foi baixado e o que continua em aberto. A tabela junta as duas na mesma linha.';
-  if (usarTitulos) {
-    const cobertura = br(vencimentos[0]) + ' a ' + br(vencimentos[vencimentos.length - 1]);
-    nota += ' Nas saídas, a origem é a filial e o destino é quem recebeu, como no relatório. Período dos títulos: ' + cobertura + '.';
+  if (falhaPeriodo === chave) {
+    nota += ' A consulta das saídas no SGF não concluiu.';
+  } else if (usarTitulos) {
+    nota += ' As saídas deste período vêm do relatório do SGF, consultado na hora. A origem é a filial e o destino é quem recebeu.';
   } else {
-    nota += ' As saídas são o total diário de despesas. O nome do fornecedor aparece quando o relatório de títulos está no servidor.';
+    nota += ' As saídas do período estão sendo consultadas no SGF.';
   }
   if (contasFora.length) nota += ' Saldo fora de escala: ' + contasFora.join(', ') + '.';
   document.getElementById('nota').textContent = nota;
@@ -386,11 +442,71 @@ render();
 """
 
 
-def carregar_titulos():
-    caminho = Path(__file__).resolve().parent / "apoio" / "titulos.json"
-    if not caminho.exists():
-        return []
-    return json.loads(caminho.read_text(encoding="utf-8"))
+DOC = re.compile(r"^(?:GF)?\d[\w./-]*-\d+$")
+DATA_CURTA = re.compile(r"^\d{2}/\d{2}/\d{2}$")
+DINHEIRO = re.compile(r"^-?\d{1,3}(?:\.\d{3})*,\d{2}$|^-?\d+,\d{2}$")
+
+
+def dinheiro(token):
+    if not token or not DINHEIRO.fullmatch(token):
+        return None
+    return float(token.replace(".", "").replace(",", "."))
+
+
+def iso_curto(token):
+    if not token or not DATA_CURTA.fullmatch(token):
+        return None
+    dia, mes, ano = token.split("/")
+    return f"20{ano}-{mes}-{dia}"
+
+
+def parse_relatorio(texto):
+    fornecedor = ""
+    titulos = []
+    for bruta in texto.splitlines():
+        linha = bruta.replace("\xa0", " ").strip()
+        if not linha or linha.startswith("Total") or linha.startswith("Página") or linha.startswith("Pagina"):
+            continue
+        if linha.startswith("Fornecedor:"):
+            nome = re.sub(r"\s+", " ", linha.split(":", 1)[1]).strip()
+            if nome and not nome.upper().startswith("CONSIDERAR"):
+                fornecedor = nome
+            continue
+        if linha.startswith("Obs"):
+            if titulos:
+                titulos[-1]["obs"] = re.sub(r"\s+", " ", linha.split(":", 1)[-1]).strip()
+            continue
+        colunas = [parte.strip() for parte in linha.split("\t")]
+        if not colunas or not DOC.match(colunas[0]):
+            continue
+
+        def coluna(indice):
+            return colunas[indice] if indice < len(colunas) else ""
+
+        pago = dinheiro(coluna(14))
+        juros = dinheiro(coluna(16))
+        atipico = any(
+            (dinheiro(token) is not None and abs(dinheiro(token)) >= ATIPICO)
+            or (dinheiro(token) is None and len(re.sub(r"\D", "", token)) >= 8)
+            for token in (coluna(14), coluna(16))
+            if token
+        )
+        titulos.append(
+            {
+                "fornecedor": fornecedor,
+                "documento": coluna(0),
+                "filial": coluna(2),
+                "emissao": iso_curto(coluna(4)),
+                "vencimento": iso_curto(coluna(5)),
+                "pagamento": iso_curto(coluna(13)),
+                "valor": dinheiro(coluna(10)),
+                "pago": None if atipico else pago,
+                "juros": None if atipico else (0 if juros is None else juros),
+                "obs": "",
+                "atipico": atipico,
+            }
+        )
+    return titulos
 
 
 def logo_data():
@@ -404,12 +520,12 @@ def logo_data():
 
 def gravar(payload, filial):
     payload["filial"] = filial
-    payload["titulos"] = carregar_titulos()
+    payload["titulos"] = []
     html = HTML.replace("__DADOS__", json.dumps(payload, ensure_ascii=False)).replace("__LOGO__", logo_data())
     arquivo = destino()
     arquivo.parent.mkdir(parents=True, exist_ok=True)
     arquivo.write_text(html, encoding="utf-8")
-    print(f"painel {arquivo} linhas={len(payload['linhas'])} titulos={len(payload['titulos'])} contas={len(payload['contas'])}")
+    print(f"painel {arquivo} linhas={len(payload['linhas'])} contas={len(payload['contas'])}")
 
 
 def controle_dir():
@@ -454,21 +570,139 @@ def ler_pedido():
     return dados if isinstance(dados, dict) else {}
 
 
-def ciclo(base, user, password, estado):
-    if estado.get("user") != user or estado.get("password") != password:
-        estado.pop("token", None)
-    estado["user"] = user
-    estado["password"] = password
-    token = estado.get("token")
-    exp = estado.get("exp")
-    if not token or exp - datetime.now(timezone.utc) < timedelta(hours=2):
-        token, filial = login(base, user, password)
-        estado["token"] = token
-        estado["exp"] = token_exp(token)
-        estado["filial"] = filial
-        print("sessao ate", estado["exp"].isoformat())
-    payload = coletar(base, estado["token"])
-    gravar(payload, estado["filial"])
+class Sessao:
+    def __init__(self, base):
+        self.base = base
+        self.user = ""
+        self.password = ""
+        self.token = ""
+        self.exp = None
+        self.filial = ""
+        self.playwright = None
+        self.browser = None
+        self.page = None
+
+    def fechar(self):
+        if self.browser:
+            try:
+                self.browser.close()
+            except Exception:
+                pass
+        if self.playwright:
+            try:
+                self.playwright.stop()
+            except Exception:
+                pass
+        self.browser = None
+        self.playwright = None
+        self.page = None
+        self.token = ""
+        self.exp = None
+
+    def pagina_viva(self):
+        try:
+            return self.page is not None and not self.page.is_closed()
+        except Exception:
+            return False
+
+    def garantir(self, user, password):
+        if self.user != user or self.password != password or not self.pagina_viva():
+            self.fechar()
+        self.user = user
+        self.password = password
+        if self.token and self.exp and self.exp - datetime.now(timezone.utc) >= timedelta(hours=2) and self.pagina_viva():
+            return
+        self.fechar()
+        self.user = user
+        self.password = password
+        self.playwright = sync_playwright().start()
+        self.browser = abrir_navegador(self.playwright)
+        self.page = self.browser.new_page()
+        self.page.goto(self.base + "/Login.pod", wait_until="domcontentloaded", timeout=40000)
+        self.page.wait_for_function(
+            "() => document.querySelector('#id_cod_filial') && document.querySelector('#id_cod_filial').value !== ''",
+            timeout=20000,
+        )
+        self.filial = self.page.locator("#nom_filial").input_value()
+        self.page.fill("#id_cod_usuario", user)
+        self.page.fill("#nom_senha", password)
+        self.page.click("#login")
+        self.page.wait_for_url("**/Menu.pod", timeout=20000)
+        token = self.page.evaluate("localStorage.getItem('token_integracao')")
+        if not token:
+            self.fechar()
+            raise RuntimeError("Login sem token de integração.")
+        self.token = token
+        self.exp = token_exp(token)
+        print("sessao ate", self.exp.isoformat())
+
+    def consultar(self, inicio, fim):
+        ini = datetime.strptime(inicio, "%Y-%m-%d")
+        final = datetime.strptime(fim, "%Y-%m-%d")
+        if final < ini or (final - ini).days > 400:
+            raise ValueError("periodo invalido")
+        self.page.goto(self.base + "/Rel_0010.pod", wait_until="domcontentloaded", timeout=40000)
+        self.page.wait_for_selector("#runReport", timeout=20000)
+        self.page.evaluate(
+            """([ini, fim]) => {
+                document.getElementById('dat_inicio').value = ini;
+                document.getElementById('dat_fim').value = fim;
+                document.getElementById('selecao1_3').checked = true;
+                document.getElementById('selecao2_3').checked = true;
+                document.getElementById('selecao3_1').checked = true;
+                document.getElementById('sel_filtroper_1').checked = true;
+                document.getElementById('saida3').checked = true;
+            }""",
+            [ini.strftime("%d/%m/%Y"), final.strftime("%d/%m/%Y")],
+        )
+        with self.page.expect_popup(timeout=150000) as espera:
+            self.page.click("#runReport")
+        popup = espera.value
+        popup.wait_for_load_state("domcontentloaded", timeout=150000)
+        popup.wait_for_function(
+            "() => document.body && (document.body.innerText.includes('Fornecedor') || document.body.innerText.includes('Total Geral'))",
+            timeout=150000,
+        )
+        texto = popup.evaluate("() => { const t = document.querySelector('table'); return t ? t.innerText : ''; }")
+        popup.close()
+        return parse_relatorio(texto)
+
+
+def ciclo(base, user, password, sessao):
+    sessao.garantir(user, password)
+    payload = coletar(base, sessao.token)
+    gravar(payload, sessao.filial)
+
+
+def ler_relatorio():
+    arquivo = controle_dir() / "relatorio.json"
+    if not arquivo.exists():
+        return {}
+    try:
+        dados = json.loads(arquivo.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return dados if isinstance(dados, dict) else {}
+
+
+def atender_relatorio(sessao, ultimo_id):
+    pedido = ler_relatorio()
+    pedido_id = str(pedido.get("id") or "")
+    if not pedido_id or pedido_id == ultimo_id:
+        return ultimo_id
+    titulos = []
+    ok = False
+    try:
+        user, password = credenciais()
+        sessao.garantir(user, password)
+        titulos = sessao.consultar(str(pedido.get("inicio") or ""), str(pedido.get("fim") or ""))
+        ok = True
+        print(f"relatorio {pedido.get('inicio')} {pedido.get('fim')} titulos={len(titulos)}")
+    except Exception as exc:
+        print("falha relatorio", type(exc).__name__)
+        sessao.fechar()
+    gravar_json(controle_dir() / "relatorio-feito.json", {"id": pedido_id, "ok": ok, "titulos": titulos})
+    return pedido_id
 
 
 def main():
@@ -476,10 +710,12 @@ def main():
     parser.add_argument("--a-cada", type=int, default=0, help="Minutos entre consultas. 0 roda uma vez.")
     args = parser.parse_args()
     base = os.environ.get("SGF_BASE", BASE_DEFAULT).rstrip("/")
-    estado = {}
+    sessao = Sessao(base)
     ultimo_id = ""
+    ultimo_relatorio = ""
     proximo = 0.0
     while True:
+        ultimo_relatorio = atender_relatorio(sessao, ultimo_relatorio)
         pedido = ler_pedido()
         pedido_id = str(pedido.get("id") or "")
         agora = time.time()
@@ -493,11 +729,11 @@ def main():
         ok = False
         try:
             user, password = credenciais()
-            ciclo(base, user, password, estado)
+            ciclo(base, user, password, sessao)
             ok = True
         except Exception as exc:
-            print("falha", exc)
-            estado.clear()
+            print("falha", type(exc).__name__)
+            sessao.fechar()
             if args.a_cada <= 0 and not por_pedido:
                 raise
         if pedido_id:
