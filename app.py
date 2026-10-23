@@ -16,7 +16,7 @@ PAINEL = Path(os.environ.get("GEFIN_PAINEL", Path(__file__).with_name("painel_sg
 DB = Path(os.environ.get("GEFIN_DB", Path(__file__).with_name("usuarios.db")))
 CONTROLE = Path(os.environ.get("GEFIN_CONTROLE", Path(__file__).with_name("controle")))
 AGUARDAR_SYNC = os.environ.get("GEFIN_AGUARDAR_SYNC") == "1"
-SYNC_TIMEOUT = 150
+SYNC_TIMEOUT = int(os.environ.get("GEFIN_SYNC_TIMEOUT", "150"))
 LOGIN_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,39}$")
 
 app = Flask(__name__)
@@ -48,6 +48,22 @@ def preparar():
                 categoria TEXT NOT NULL,
                 valor REAL NOT NULL,
                 UNIQUE(tipo, categoria)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS metas_origem (
+                origem TEXT PRIMARY KEY,
+                valor REAL NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS configuracao (
+                chave TEXT PRIMARY KEY,
+                valor TEXT NOT NULL
             )
             """
         )
@@ -160,12 +176,12 @@ def salvar_credenciais_sgf(usuario, senha):
     return ""
 
 
-def pedir_sincronizacao():
+def pedir_sincronizacao(inicio="", fim=""):
     if not AGUARDAR_SYNC:
         return {"ok": True}
     antes = PAINEL.stat().st_mtime_ns if PAINEL.exists() else 0
     pedido_id = secrets.token_hex(8)
-    gravar_json(CONTROLE / "pedido.json", {"id": pedido_id})
+    gravar_json(CONTROLE / "pedido.json", {"id": pedido_id, "inicio": inicio, "fim": fim})
     limite = time.time() + SYNC_TIMEOUT
     feito_caminho = CONTROLE / "feito.json"
     while time.time() < limite:
@@ -176,6 +192,98 @@ def pedir_sincronizacao():
             return feito
         time.sleep(0.4)
     return {"ok": False}
+
+
+def dados_painel():
+    if not PAINEL.exists():
+        return {}
+    texto = PAINEL.read_text(encoding="utf-8")
+    marca = "const DADOS = "
+    inicio = texto.find(marca)
+    if inicio < 0:
+        return {}
+    try:
+        dados, _ = json.JSONDecoder().raw_decode(texto[inicio + len(marca) :])
+    except json.JSONDecodeError:
+        return {}
+    return dados if isinstance(dados, dict) else {}
+
+
+def idade_sync(iso):
+    texto = str(iso or "").strip()
+    if not texto:
+        return "sem sincronização"
+    try:
+        quando = datetime.fromisoformat(texto)
+    except ValueError:
+        return "sem sincronização"
+    agora = datetime.now(quando.tzinfo) if quando.tzinfo else datetime.now()
+    minutos = max(0, int((agora - quando).total_seconds())) // 60
+    if minutos < 1:
+        return "há menos de 1 min"
+    if minutos < 60:
+        return f"há {minutos} min"
+    horas = minutos // 60
+    if horas < 24:
+        return f"há {horas} h"
+    return f"há {horas // 24} d"
+
+
+def periodo_formulario(inicio, fim):
+    if not inicio and not fim:
+        hoje = datetime.now()
+        return hoje.replace(day=1).strftime("%Y-%m-%d"), hoje.strftime("%Y-%m-%d")
+    try:
+        ini = datetime.strptime(inicio, "%Y-%m-%d")
+        final = datetime.strptime(fim, "%Y-%m-%d")
+    except ValueError:
+        return None
+    if final < ini or (final - ini).days > 400:
+        return None
+    return inicio, fim
+
+
+def bloco_atualizar(csrf, gerado_em):
+    return (
+        '<div style="position:sticky;top:46px;z-index:19;display:flex;gap:10px;align-items:center;'
+        'flex-wrap:wrap;padding:8px 16px;background:#f8fafc;border-bottom:1px solid #d7e0ec;'
+        'font:14px/1.3 system-ui,Segoe UI,sans-serif">'
+        '<button id="atualizar" type="button" style="border:1px solid #1d4ed8;background:#1d4ed8;color:#fff;'
+        'border-radius:8px;padding:6px 12px;cursor:pointer;font-weight:700">Atualizar</button>'
+        f'<span id="idadeSync" data-quando="{html.escape(gerado_em, quote=True)}">{html.escape(idade_sync(gerado_em))}</span>'
+        '<span id="avisoSync"></span></div>'
+        "<script>(function(){"
+        f"var quando={json.dumps(gerado_em)};"
+        "function textoIdade(iso){if(!iso)return 'sem sincronização';"
+        "var ms=Date.now()-new Date(String(iso).replace(' ','T')).getTime();"
+        "if(!isFinite(ms))return 'sem sincronização';"
+        "var minutos=Math.floor(Math.max(0,ms)/60000);"
+        "if(minutos<1)return 'há menos de 1 min';"
+        "if(minutos<60)return 'há '+minutos+' min';"
+        "var horas=Math.floor(minutos/60);"
+        "if(horas<24)return 'há '+horas+' h';"
+        "return 'há '+Math.floor(horas/24)+' d';}"
+        "var el=document.getElementById('idadeSync');"
+        "function pintar(){if(el)el.textContent=textoIdade(quando);}"
+        "pintar();setInterval(pintar,15000);"
+        "var botao=document.getElementById('atualizar');"
+        "if(!botao)return;"
+        "botao.addEventListener('click',function(){"
+        "botao.disabled=true;botao.textContent='Sincronizando...';"
+        "var aviso=document.getElementById('avisoSync');if(aviso)aviso.textContent='';"
+        "var corpo=new URLSearchParams();"
+        f"corpo.set('csrf',{json.dumps(csrf)});"
+        "var inicio=document.getElementById('inicio');var fim=document.getElementById('fim');"
+        "if(inicio&&fim){corpo.set('inicio',inicio.value);corpo.set('fim',fim.value);}"
+        "fetch('/atualizar',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:corpo.toString()})"
+        ".then(function(resposta){return resposta.json();})"
+        ".then(function(dados){if(dados&&dados.ok){location.reload();return;}"
+        "botao.disabled=false;botao.textContent='Atualizar';"
+        "if(aviso)aviso.textContent='Não foi possível sincronizar. A tela continua com a última consulta concluída.';})"
+        ".catch(function(){botao.disabled=false;botao.textContent='Atualizar';"
+        "if(aviso)aviso.textContent='Não foi possível sincronizar. A tela continua com a última consulta concluída.';});"
+        "});})();</script>"
+    )
 
 
 def listar_metas():
@@ -190,17 +298,7 @@ def listar_metas_admin():
 
 
 def categorias_painel():
-    if not PAINEL.exists():
-        return []
-    texto = PAINEL.read_text(encoding="utf-8")
-    marca = "const DADOS = "
-    inicio = texto.find(marca)
-    if inicio < 0:
-        return []
-    try:
-        dados, _ = json.JSONDecoder().raw_decode(texto[inicio + len(marca) :])
-    except json.JSONDecodeError:
-        return []
+    dados = dados_painel()
     vistas = []
     chaves = set()
     for item in dados.get("linhas") or []:
@@ -214,6 +312,125 @@ def categorias_painel():
             vistas.append({"tipo": tipo, "descricao": descricao})
     vistas.sort(key=lambda item: (item["tipo"], item["descricao"]))
     return vistas
+
+
+CODIGO_ORIGEM = re.compile(r"^[0-9A-Za-z]{0,12}$")
+
+
+def nome_origem(codigo):
+    if codigo == "100":
+        return "ADM | Central"
+    if not codigo:
+        return "Sem filial"
+    return f"Filial {codigo}"
+
+
+def ordem_origem(codigo):
+    if str(codigo).isdigit():
+        return (0, int(codigo))
+    return (1, str(codigo))
+
+
+def decimal_br(valor):
+    texto = f"{float(valor):,.2f}"
+    return texto.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def codigos_no_painel():
+    codigos = set()
+    for item in dados_painel().get("titulos") or []:
+        codigo = str(item.get("filial") or "").strip()
+        if CODIGO_ORIGEM.fullmatch(codigo):
+            codigos.add(codigo)
+    return codigos
+
+
+def metas_origem_salvas():
+    with conectar() as conn:
+        linhas = conn.execute("SELECT origem, valor FROM metas_origem").fetchall()
+    return {item["origem"]: item["valor"] for item in linhas}
+
+
+def percentual_aviso():
+    with conectar() as conn:
+        row = conn.execute("SELECT valor FROM configuracao WHERE chave = ?", ("meta_percentual",)).fetchone()
+    if not row:
+        return None
+    try:
+        valor = float(str(row["valor"]).replace(",", "."))
+    except ValueError:
+        return None
+    if valor < 1 or valor > 100:
+        return None
+    return valor
+
+
+def texto_percentual(valor):
+    if valor is None:
+        return ""
+    numero = float(valor)
+    if numero.is_integer():
+        return str(int(numero))
+    return f"{numero:.1f}".replace(".", ",")
+
+
+def linhas_formulario(textos=None):
+    salvas = metas_origem_salvas()
+    presentes = codigos_no_painel()
+    codigos = set(presentes) | set(salvas)
+    if textos is not None:
+        codigos |= set(textos)
+    linhas = []
+    for codigo in sorted(codigos, key=ordem_origem):
+        if not CODIGO_ORIGEM.fullmatch(codigo):
+            continue
+        if textos is not None and codigo in textos:
+            texto = textos[codigo]
+        elif codigo in salvas:
+            texto = decimal_br(salvas[codigo])
+        else:
+            texto = ""
+        linhas.append(
+            {
+                "codigo": codigo,
+                "nome": nome_origem(codigo),
+                "texto": texto,
+                "no_painel": codigo in presentes,
+            }
+        )
+    return linhas
+
+
+def payload_metas_origem():
+    salvas = metas_origem_salvas()
+    return {
+        "percentual": percentual_aviso(),
+        "itens": [{"origem": origem, "valor": salvas[origem]} for origem in sorted(salvas, key=ordem_origem)],
+    }
+
+
+def ler_percentual_form(texto):
+    bruto = (texto or "").strip().replace("%", "").replace(" ", "")
+    if not bruto:
+        return None, "Informe o percentual de aviso."
+    if "," in bruto:
+        bruto = bruto.replace(".", "").replace(",", ".")
+    try:
+        valor = round(float(bruto), 1)
+    except ValueError:
+        return None, "Informe o percentual de aviso entre 1 e 100."
+    if valor < 1 or valor > 100:
+        return None, "Informe o percentual de aviso entre 1 e 100."
+    return valor, ""
+
+
+def ler_meta_form(texto):
+    if not (texto or "").strip():
+        return None, ""
+    valor = valor_br(texto)
+    if valor is None:
+        return None, "Informe a meta com um valor maior que zero ou deixe o campo em branco."
+    return valor, ""
 
 
 def valor_br(texto):
@@ -296,7 +513,6 @@ def login_post():
     session.permanent = True
     session["uid"] = usuario["id"]
     session["csrf"] = secrets.token_urlsafe(32)
-    session["sync"] = pedir_sincronizacao()
     return redirect("/")
 
 
@@ -312,11 +528,11 @@ def painel():
     usuario, resposta = exigir_login()
     if resposta:
         return resposta
-    resultado = session.pop("sync", None) or pedir_sincronizacao()
     if not PAINEL.exists():
-        conteudo = "<!DOCTYPE html><html lang='pt-BR'><body><p>O relatório ainda está sendo gerado.</p></body></html>"
+        conteudo = "<!DOCTYPE html><html lang='pt-BR'><body><p>O relatório ainda está sendo gerado. Use Atualizar para consultar o SGF.</p></body></html>"
     else:
         conteudo = PAINEL.read_text(encoding="utf-8")
+    csrf = garantir_csrf()
     barra = (
         '<div style="position:sticky;top:0;z-index:20;display:flex;justify-content:space-between;'
         'gap:12px;align-items:center;padding:10px 16px;background:#102033;color:#fff;'
@@ -325,23 +541,36 @@ def painel():
         + ('<a style="color:#fff" href="/usuarios">Usuários</a><a style="color:#fff" href="/metas">Metas</a><a style="color:#fff" href="/consulta">Acesso SGF</a>' if usuario["admin"] else "")
         + '<a style="color:#fff" href="/senha">Senha</a>'
         + '<form method="post" action="/sair" style="margin:0">'
-        + f'<input type="hidden" name="csrf" value="{html.escape(garantir_csrf())}">'
+        + f'<input type="hidden" name="csrf" value="{html.escape(csrf)}">'
         + '<button style="border:1px solid #fff;background:transparent;color:#fff;border-radius:8px;padding:4px 10px;cursor:pointer" type="submit">Sair</button>'
         + "</form></span></div>"
     )
-    if not resultado.get("ok", True):
-        barra += (
-            '<div style="background:#fff7e8;color:#102033;padding:8px 16px;'
-            'font:14px/1.4 system-ui,Segoe UI,sans-serif">'
-            "Não foi possível atualizar agora. Os dados exibidos são da última consulta concluída."
-            "</div>"
-        )
+    if 'id="atualizar"' not in conteudo:
+        barra += bloco_atualizar(csrf, str(dados_painel().get("geradoEm") or ""))
+    conteudo = conteudo.replace("__METAS_ORIGEM__", json.dumps(payload_metas_origem(), ensure_ascii=False), 1)
     conteudo = conteudo.replace("__METAS__", json.dumps(listar_metas(), ensure_ascii=False), 1)
+    conteudo = conteudo.replace('"__CSRF__"', json.dumps(csrf), 1)
     if "<body>" in conteudo:
         conteudo = conteudo.replace("<body>", "<body>" + barra, 1)
     else:
         conteudo = barra + conteudo
     return conteudo
+
+
+@app.post("/atualizar")
+def atualizar():
+    _usuario, resposta = exigir_login()
+    if resposta:
+        return resposta
+    if not csrf_ok():
+        return jsonify({"ok": False}), 403
+    periodo = periodo_formulario(request.form.get("inicio", ""), request.form.get("fim", ""))
+    if not periodo:
+        return jsonify({"ok": False}), 400
+    if not AGUARDAR_SYNC:
+        return jsonify({"ok": False})
+    resultado = pedir_sincronizacao(periodo[0], periodo[1])
+    return jsonify({"ok": bool(resultado.get("ok"))})
 
 
 @app.get("/saidas")
@@ -351,25 +580,17 @@ def saidas():
         return resposta
     inicio = request.args.get("inicio", "")
     fim = request.args.get("fim", "")
-    try:
-        ini = datetime.strptime(inicio, "%Y-%m-%d")
-        final = datetime.strptime(fim, "%Y-%m-%d")
-    except ValueError:
+    periodo = periodo_formulario(inicio, fim)
+    if not periodo or not inicio or not fim:
         return jsonify({"ok": False, "titulos": []}), 400
-    if final < ini or (final - ini).days > 400:
-        return jsonify({"ok": False, "titulos": []}), 400
-    if not AGUARDAR_SYNC:
-        return jsonify({"ok": False, "titulos": []})
-    pedido_id = secrets.token_hex(8)
-    gravar_json(CONTROLE / "relatorio.json", {"id": pedido_id, "inicio": inicio, "fim": fim})
-    limite = time.time() + SYNC_TIMEOUT
-    feito_caminho = CONTROLE / "relatorio-feito.json"
-    while time.time() < limite:
-        feito = ler_json(feito_caminho)
-        if feito.get("id") == pedido_id:
-            return jsonify({"ok": bool(feito.get("ok")), "titulos": feito.get("titulos") or []})
-        time.sleep(0.4)
-    return jsonify({"ok": False, "titulos": []})
+    titulos = []
+    for item in dados_painel().get("titulos") or []:
+        if not isinstance(item, dict):
+            continue
+        vencimento = str(item.get("vencimento") or "")
+        if periodo[0] <= vencimento <= periodo[1]:
+            titulos.append(item)
+    return jsonify({"ok": True, "titulos": titulos})
 
 
 @app.get("/usuarios")
@@ -576,9 +797,8 @@ def metas_form():
         "metas.html",
         erro="",
         aviso=session.pop("aviso", ""),
-        metas=listar_metas_admin(),
-        categorias=categorias_painel(),
-        moeda=moeda_br,
+        linhas=linhas_formulario(),
+        percentual=texto_percentual(percentual_aviso()),
         csrf=garantir_csrf(),
     )
 
@@ -590,35 +810,60 @@ def metas_post():
         return resposta
     if not usuario["admin"] or not csrf_ok():
         return redirect("/")
-    tipo = request.form.get("tipo", "")
-    categoria = request.form.get("categoria", "").strip()
-    valor = valor_br(request.form.get("valor", ""))
-    erro = ""
-    if tipo not in {"receber", "pagar"}:
-        erro = "Escolha receita ou despesa."
-    elif not categoria or len(categoria) > 80:
-        erro = "Informe a categoria."
-    elif valor is None:
-        erro = "Informe a meta com um valor maior que zero."
+    percentual, erro = ler_percentual_form(request.form.get("percentual", ""))
+    origens = request.form.getlist("origem")
+    valores = request.form.getlist("valor")
+    textos = {}
+    pares = []
+    if len(origens) != len(valores):
+        erro = erro or "Não foi possível ler as metas."
+    else:
+        vistos = set()
+        conhecidas = codigos_no_painel() | set(metas_origem_salvas())
+        for codigo, texto in zip(origens, valores):
+            codigo = codigo.strip()
+            textos[codigo] = texto
+            if codigo in vistos:
+                erro = erro or "Origem repetida."
+                continue
+            vistos.add(codigo)
+            if not CODIGO_ORIGEM.fullmatch(codigo) or codigo not in conhecidas:
+                erro = erro or "Origem desconhecida."
+                continue
+            valor, falha = ler_meta_form(texto)
+            if falha:
+                erro = erro or falha
+                continue
+            pares.append((codigo, valor))
     if erro:
         return render_template(
             "metas.html",
             erro=erro,
             aviso="",
-            metas=listar_metas_admin(),
-            categorias=categorias_painel(),
-            moeda=moeda_br,
+            linhas=linhas_formulario(textos),
+            percentual=request.form.get("percentual", ""),
             csrf=garantir_csrf(),
         )
     with conectar() as conn:
         conn.execute(
             """
-            INSERT INTO metas (tipo, categoria, valor) VALUES (?, ?, ?)
-            ON CONFLICT(tipo, categoria) DO UPDATE SET valor = excluded.valor
+            INSERT INTO configuracao (chave, valor) VALUES ('meta_percentual', ?)
+            ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor
             """,
-            (tipo, categoria, valor),
+            (str(percentual),),
         )
-    session["aviso"] = "Meta salva."
+        for codigo, valor in pares:
+            if valor is None:
+                conn.execute("DELETE FROM metas_origem WHERE origem = ?", (codigo,))
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO metas_origem (origem, valor) VALUES (?, ?)
+                    ON CONFLICT(origem) DO UPDATE SET valor = excluded.valor
+                    """,
+                    (codigo, valor),
+                )
+    session["aviso"] = "Metas salvas."
     return redirect("/metas")
 
 

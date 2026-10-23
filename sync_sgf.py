@@ -192,9 +192,14 @@ HTML = """<!DOCTYPE html>
   label { color:var(--muted); font-size:13px; }
   input[type="date"], select { border:1px solid var(--line); border-radius:8px; padding:6px 8px; font:inherit; background:#fff; max-width:100%; }
   select { min-width:260px; }
-  .sessao { margin-top:18px; }
-  .sessao h3 { margin:0 0 8px; font-size:15px; display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+  .sessao { margin-top:16px; border:1px solid var(--line); border-left:4px solid var(--pay); border-radius:12px; padding:12px 12px 4px; background:#fff; }
+  .sessao h3 { margin:0 0 8px; font-size:16px; display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; }
   .sessao h3 em { font-style:normal; color:var(--muted); font-size:12px; font-weight:600; }
+  button#atualizar { background:var(--accent); color:#fff; border-color:var(--accent); font-weight:700; }
+  button#atualizar:disabled { opacity:.65; cursor:wait; }
+  .idade-sync { color:var(--muted); font-size:13px; font-weight:600; }
+  .aviso-sync { color:#b42318; font-weight:700; margin:-8px 0 12px; }
+  .aviso-sync:empty { display:none; }
   .totalizador { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; margin:8px 0 0; padding:10px 12px; background:#f8fafc; border:1px solid var(--line); border-radius:10px; font-weight:700; }
   tfoot td { font-weight:700; background:#f8fafc; }
   .bar-origem { width:36px; max-width:36px; background:linear-gradient(180deg, var(--pay), #fca5a5); }
@@ -226,7 +231,10 @@ HTML = """<!DOCTYPE html>
     <label>De <input id="inicio" type="date"></label>
     <label>Até <input id="fim" type="date"></label>
     <button id="buscar" type="button">Buscar</button>
+    <button id="atualizar" type="button">Atualizar</button>
+    <span id="idadeSync" class="idade-sync"></span>
   </div>
+  <p id="avisoSync" class="aviso-sync"></p>
   <div id="alertas"></div>
   <div class="cards">
     <div class="card"><span>Entradas</span><strong class="rec" id="receber"></strong></div>
@@ -278,15 +286,11 @@ HTML = """<!DOCTYPE html>
 <script>
 const DADOS = __DADOS__;
 const METAS = __METAS__;
+const CSRF = "__CSRF__";
 const moeda = new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'});
 const titulosEmbutidos = DADOS.titulos || [];
 const coberturaInicio = DADOS.titulosInicio || '';
 const coberturaFim = DADOS.titulosFim || '';
-let titulosConsulta = null;
-let periodoPronto = '';
-let consultaAndamento = '';
-let falhaPeriodo = '';
-let geracaoConsulta = 0;
 const meses = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
 
 function esc(valor) {
@@ -410,31 +414,7 @@ function render() {
   const inicio = document.getElementById('inicio').value;
   const fim = document.getElementById('fim').value;
   renderAlertas(inicio, fim);
-  const chave = inicio + '|' + fim;
-  const coberto = coberturaInicio && coberturaFim && inicio >= coberturaInicio && fim <= coberturaFim;
-  const titulos = periodoPronto === chave ? (titulosConsulta || []) : (coberto ? titulosEmbutidos : []);
-  const usarTitulos = periodoPronto === chave || (coberto && periodoPronto !== chave && consultaAndamento !== chave);
-  if (inicio && fim && !coberto && chave !== periodoPronto && consultaAndamento !== chave) {
-    consultaAndamento = chave;
-    const geracao = ++geracaoConsulta;
-    const aviso = document.getElementById('tituloSaidas');
-    if (aviso) aviso.innerHTML = 'Saídas <em>Consultando o relatório no SGF...</em>';
-    fetch('/saidas?inicio=' + encodeURIComponent(inicio) + '&fim=' + encodeURIComponent(fim))
-      .then(resposta => resposta.json())
-      .then(dados => {
-        if (geracao !== geracaoConsulta) return;
-        titulosConsulta = (dados && dados.ok) ? (dados.titulos || []) : [];
-        falhaPeriodo = (dados && dados.ok) ? '' : chave;
-        periodoPronto = chave;
-      })
-      .catch(() => {
-        if (geracao !== geracaoConsulta) return;
-        titulosConsulta = [];
-        falhaPeriodo = chave;
-        periodoPronto = chave;
-      })
-      .finally(() => { if (geracao === geracaoConsulta) { consultaAndamento = ''; render(); } });
-  }
+  const titulos = titulosEmbutidos;
   const entradas = linhasDoPeriodo('receber', inicio, fim);
   const saidasPeriodo = titulos.filter(item => dentro(item.vencimento, inicio, fim));
   const select = document.getElementById('filtroFornecedor');
@@ -447,25 +427,19 @@ function render() {
   ).join('');
   select.value = selecionado;
   select.onchange = render;
-  select.disabled = !usarTitulos;
   const saidasTitulos = selecionado ? saidasPeriodo.filter(item => (item.fornecedor || '') === selecionado) : saidasPeriodo;
   const totalEntradas = soma(entradas, 'valor');
   const totais = totaisDe(saidasTitulos);
   const totalSaidas = totais.valor;
   document.getElementById('receber').textContent = moeda.format(totalEntradas);
-  document.getElementById('pagar').textContent = usarTitulos ? moeda.format(totalSaidas) : '...';
+  document.getElementById('pagar').textContent = moeda.format(totalSaidas);
   const saldo = totalEntradas - totalSaidas;
   const saldoEl = document.getElementById('saldo');
-  if (usarTitulos) {
-    saldoEl.textContent = moeda.format(saldo);
-    saldoEl.className = saldo >= 0 ? 'rec' : 'pay';
-  } else {
-    saldoEl.textContent = '...';
-    saldoEl.className = '';
-  }
-  document.getElementById('abertas').textContent = usarTitulos ? moeda.format(totais.aberto) : '...';
+  saldoEl.textContent = moeda.format(saldo);
+  saldoEl.className = saldo >= 0 ? 'rec' : 'pay';
+  document.getElementById('abertas').textContent = moeda.format(totais.aberto);
   renderGrafico(fim);
-  renderGraficoOrigem(usarTitulos ? saidasTitulos : [], selecionado ? selecionado : 'Total do período');
+  renderGraficoOrigem(saidasTitulos, selecionado ? selecionado : 'Total do período');
 
   document.getElementById('entradas').innerHTML = agrupar(entradas).map(item =>
     '<tr><td>' + br(item.data) + '</td><td>' + esc(item.descricao) + '</td><td class="num rec">' + moeda.format(item.baixado) + '</td><td class="num">' + moeda.format(item.aberto) + '</td><td class="num">' + moeda.format(item.baixado + item.aberto) + '</td></tr>'
@@ -474,33 +448,19 @@ function render() {
   const titulo = document.getElementById('tituloSaidas');
   const sessoes = document.getElementById('sessoesSaidas');
   const caixaTotal = document.getElementById('totalSaidas');
-  if (usarTitulos && falhaPeriodo === chave) {
-    titulo.innerHTML = 'Saídas <em>A consulta no SGF não concluiu</em>';
-    caixaTotal.textContent = '';
-    sessoes.innerHTML = '<p>Não foi possível ler o relatório deste período. Tente buscar de novo.</p>';
-  } else if (usarTitulos) {
-    titulo.innerHTML = 'Saídas <em>' + (selecionado ? esc(selecionado) : 'Uma seção por origem') + '</em>';
-    caixaTotal.innerHTML = textoTotais('Total', totais);
-    const origens = [...new Set(saidasTitulos.map(item => item.filial || ''))].sort((a, b) => ordemOrigem(a) - ordemOrigem(b));
-    sessoes.innerHTML = origens.map(codigo => {
-      const linhas = saidasTitulos.filter(item => (item.filial || '') === codigo);
-      const parcial = totaisDe(linhas);
-      return '<section class="sessao"><h3>' + esc(nomeOrigem(codigo)) + '<em>Total ' + moeda.format(parcial.valor) + ' · Em aberto ' + moeda.format(parcial.aberto) + '</em></h3>'
-        + '<div class="tabela"><table><thead><tr><th>Descrição</th><th>Documento</th><th>Emissão</th><th>Vencimento</th><th class="num">Valor</th><th class="num">Pago</th><th class="num">Juros</th><th>Pagamento</th><th>Observação</th></tr></thead><tbody>'
-        + linhas.map(item =>
-          '<tr class="' + (item.atipico ? 'atipico' : '') + '"><td>' + esc(item.fornecedor) + '</td><td>' + esc(item.documento) + '</td><td>' + br(item.emissao) + '</td><td>' + br(item.vencimento) + '</td><td class="num">' + moedaOuVazio(item.valor) + '</td><td class="num">' + (item.atipico ? 'ilegível' : moedaOuVazio(item.pago)) + '</td><td class="num">' + (item.atipico ? '' : moedaOuVazio(item.juros)) + '</td><td>' + (item.pagamento ? br(item.pagamento) : 'Em aberto') + '</td><td>' + esc(item.obs) + '</td></tr>'
-        ).join('')
-        + '</tbody><tfoot><tr><td colspan="4">Total · ' + parcial.quantidade + (parcial.quantidade === 1 ? ' título' : ' títulos') + '</td><td class="num">' + moeda.format(parcial.valor) + '</td><td class="num">' + moeda.format(parcial.pago) + '</td><td></td><td class="num">' + moeda.format(parcial.aberto) + '</td><td></td></tr></tfoot></table></div></section>';
-    }).join('') || '<p>Nenhuma saída nesse período.</p>';
-  } else if (consultaAndamento === inicio + '|' + fim) {
-    titulo.innerHTML = 'Saídas <em>Consultando o relatório no SGF...</em>';
-    caixaTotal.textContent = '';
-    sessoes.innerHTML = '<p>Aguardando a consulta do período no site.</p>';
-  } else {
-    titulo.innerHTML = 'Saídas';
-    caixaTotal.textContent = '';
-    sessoes.innerHTML = '<p>Nenhuma saída nesse período.</p>';
-  }
+  titulo.innerHTML = 'Saídas <em>' + (selecionado ? esc(selecionado) : 'Uma subseção por origem') + '</em>';
+  caixaTotal.innerHTML = textoTotais('Total', totais);
+  const origens = [...new Set(saidasTitulos.map(item => item.filial || ''))].sort((a, b) => ordemOrigem(a) - ordemOrigem(b));
+  sessoes.innerHTML = origens.map(codigo => {
+    const linhas = saidasTitulos.filter(item => (item.filial || '') === codigo);
+    const parcial = totaisDe(linhas);
+    return '<section class="sessao"><h3>' + esc(nomeOrigem(codigo)) + '<em>Total ' + moeda.format(parcial.valor) + ' · Em aberto ' + moeda.format(parcial.aberto) + '</em></h3>'
+      + '<div class="tabela"><table><thead><tr><th>Descrição</th><th>Documento</th><th>Emissão</th><th>Vencimento</th><th class="num">Valor</th><th class="num">Pago</th><th class="num">Juros</th><th>Pagamento</th><th>Observação</th></tr></thead><tbody>'
+      + linhas.map(item =>
+        '<tr class="' + (item.atipico ? 'atipico' : '') + '"><td>' + esc(item.fornecedor) + '</td><td>' + esc(item.documento) + '</td><td>' + br(item.emissao) + '</td><td>' + br(item.vencimento) + '</td><td class="num">' + moedaOuVazio(item.valor) + '</td><td class="num">' + (item.atipico ? 'ilegível' : moedaOuVazio(item.pago)) + '</td><td class="num">' + (item.atipico ? '' : moedaOuVazio(item.juros)) + '</td><td>' + (item.pagamento ? br(item.pagamento) : 'Em aberto') + '</td><td>' + esc(item.obs) + '</td></tr>'
+      ).join('')
+      + '</tbody><tfoot><tr><td colspan="4">Subtotal · ' + parcial.quantidade + (parcial.quantidade === 1 ? ' título' : ' títulos') + '</td><td class="num">' + moeda.format(parcial.valor) + '</td><td class="num">' + moeda.format(parcial.pago) + '</td><td></td><td class="num">' + moeda.format(parcial.aberto) + '</td><td></td></tr></tfoot></table></div></section>';
+  }).join('') || '<p>Nenhuma saída nesse período.</p>';
 
   document.getElementById('contas').innerHTML = (DADOS.contas || []).map(conta =>
     '<tr><td>' + esc(conta.nome) + '</td><td class="num">' + moeda.format(conta.saldo) + '</td></tr>'
@@ -509,12 +469,9 @@ function render() {
   document.getElementById('meta').textContent = (DADOS.filial || '') + ' · atualizado em ' + String(DADOS.geradoEm || '').replace('T', ' ');
   const contasFora = (DADOS.contas || []).filter(conta => Math.abs(conta.saldo) >= 1000000).map(conta => conta.nome);
   let nota = 'O SGF separa cada dia em duas partes: o que já foi baixado e o que continua em aberto. A tabela junta as duas na mesma linha.';
-  if (falhaPeriodo === chave) {
-    nota += ' A consulta das saídas no SGF não concluiu.';
-  } else if (usarTitulos) {
-    nota += ' Nas saídas, cada origem fica em uma seção, com o total da filial. O filtro de descrição mostra só aquele fornecedor e recalcula os totais.';
-  } else {
-    nota += ' As saídas do período estão sendo consultadas no SGF.';
+  nota += ' Nas saídas, cada origem fica em uma subseção, com o próprio subtotal. O filtro de descrição mostra só aquele fornecedor e recalcula os totais. Atualizar consulta o SGF; até lá, a tela usa o último sincronismo.';
+  if (coberturaInicio && coberturaFim && (inicio < coberturaInicio || fim > coberturaFim)) {
+    nota += ' O último sincronismo cobre ' + br(coberturaInicio) + ' a ' + br(coberturaFim) + '.';
   }
   if (contasFora.length) nota += ' Saldo fora de escala: ' + contasFora.join(', ') + '.';
   document.getElementById('nota').textContent = nota;
@@ -525,14 +482,61 @@ function isoLocal(data) {
   const dia = String(data.getDate()).padStart(2, '0');
   return data.getFullYear() + '-' + mes + '-' + dia;
 }
+function textoIdade(iso) {
+  if (!iso) return 'sem sincronização';
+  const ms = Date.now() - new Date(String(iso).replace(' ', 'T')).getTime();
+  if (!Number.isFinite(ms)) return 'sem sincronização';
+  const minutos = Math.floor(Math.max(0, ms) / 60000);
+  if (minutos < 1) return 'há menos de 1 min';
+  if (minutos < 60) return 'há ' + minutos + ' min';
+  const horas = Math.floor(minutos / 60);
+  if (horas < 24) return 'há ' + horas + ' h';
+  return 'há ' + Math.floor(horas / 24) + ' d';
+}
+function pintarIdade() {
+  const el = document.getElementById('idadeSync');
+  if (el) el.textContent = textoIdade(DADOS.geradoEm || '');
+}
+pintarIdade();
+setInterval(pintarIdade, 15000);
+
 const inicioEl = document.getElementById('inicio');
 const fimEl = document.getElementById('fim');
 const agora = new Date();
-inicioEl.value = isoLocal(new Date(agora.getFullYear(), agora.getMonth(), 1));
-fimEl.value = isoLocal(agora);
+if (coberturaInicio && coberturaFim) {
+  inicioEl.value = coberturaInicio;
+  fimEl.value = coberturaFim;
+} else {
+  inicioEl.value = isoLocal(new Date(agora.getFullYear(), agora.getMonth(), 1));
+  fimEl.value = isoLocal(agora);
+}
 document.getElementById('buscar').onclick = render;
 inicioEl.onchange = render;
 fimEl.onchange = render;
+document.getElementById('atualizar').onclick = () => {
+  const botao = document.getElementById('atualizar');
+  const aviso = document.getElementById('avisoSync');
+  botao.disabled = true;
+  botao.textContent = 'Sincronizando...';
+  if (aviso) aviso.textContent = '';
+  const corpo = new URLSearchParams();
+  corpo.set('csrf', CSRF);
+  corpo.set('inicio', inicioEl.value);
+  corpo.set('fim', fimEl.value);
+  fetch('/atualizar', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: corpo.toString()})
+    .then(resposta => resposta.json())
+    .then(dados => {
+      if (dados && dados.ok) { location.reload(); return; }
+      botao.disabled = false;
+      botao.textContent = 'Atualizar';
+      if (aviso) aviso.textContent = 'Não foi possível sincronizar. A tela continua com a última consulta concluída.';
+    })
+    .catch(() => {
+      botao.disabled = false;
+      botao.textContent = 'Atualizar';
+      if (aviso) aviso.textContent = 'Não foi possível sincronizar. A tela continua com a última consulta concluída.';
+    });
+};
 render();
 </script>
 </body>
@@ -766,21 +770,29 @@ class Sessao:
         return parse_relatorio(texto)
 
 
-def ciclo(base, user, password, sessao):
+def periodo_consulta(inicio, fim):
+    hoje = date.today()
+    padrao = hoje.replace(day=1).isoformat(), hoje.isoformat()
+    if not inicio or not fim:
+        return padrao
+    try:
+        ini = datetime.strptime(inicio, "%Y-%m-%d").date()
+        final = datetime.strptime(fim, "%Y-%m-%d").date()
+    except ValueError:
+        return padrao
+    if final < ini or (final - ini).days > 400:
+        return padrao
+    return ini.isoformat(), final.isoformat()
+
+
+def ciclo(base, user, password, sessao, inicio="", fim=""):
     sessao.garantir(user, password)
     payload = coletar(base, sessao.token)
-    hoje = date.today()
-    inicio = hoje.replace(day=1).isoformat()
-    fim = hoje.isoformat()
-    try:
-        payload["titulos"] = sessao.consultar(inicio, fim)
-        payload["titulosInicio"] = inicio
-        payload["titulosFim"] = fim
-    except Exception as exc:
-        print("falha relatorio", type(exc).__name__)
-        payload["titulos"] = []
-        payload["titulosInicio"] = ""
-        payload["titulosFim"] = ""
+    inicio, fim = periodo_consulta(inicio, fim)
+    payload["titulos"] = sessao.consultar(inicio, fim)
+    payload["titulosInicio"] = inicio
+    payload["titulosFim"] = fim
+    payload["geradoEm"] = datetime.now().astimezone().isoformat(timespec="seconds")
     gravar(payload, sessao.filial)
 
 
@@ -815,12 +827,34 @@ def atender_relatorio(sessao, ultimo_id):
     return pedido_id
 
 
+def executar_ciclo(sessao, base, inicio="", fim=""):
+    try:
+        user, password = credenciais()
+        ciclo(base, user, password, sessao, inicio, fim)
+        return True
+    except Exception as exc:
+        print("falha", type(exc).__name__)
+        sessao.fechar()
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--a-cada", type=int, default=0, help="Minutos entre consultas. 0 roda uma vez.")
+    parser.add_argument("--sob-demanda", action="store_true", help="Só sincroniza quando o painel pede.")
     args = parser.parse_args()
     base = os.environ.get("SGF_BASE", BASE_DEFAULT).rstrip("/")
     sessao = Sessao(base)
+    if args.sob_demanda:
+        ultimo_id = str(ler_pedido().get("id") or "")
+        while True:
+            pedido = ler_pedido()
+            pedido_id = str(pedido.get("id") or "")
+            if pedido_id and pedido_id != ultimo_id:
+                ok = executar_ciclo(sessao, base, str(pedido.get("inicio") or ""), str(pedido.get("fim") or ""))
+                gravar_json(controle_dir() / "feito.json", {"id": pedido_id, "ok": ok})
+                ultimo_id = pedido_id
+            time.sleep(0.4)
     ultimo_id = ""
     ultimo_relatorio = ""
     proximo = 0.0
@@ -836,16 +870,9 @@ def main():
                 break
             time.sleep(0.4)
             continue
-        ok = False
-        try:
-            user, password = credenciais()
-            ciclo(base, user, password, sessao)
-            ok = True
-        except Exception as exc:
-            print("falha", type(exc).__name__)
-            sessao.fechar()
-            if args.a_cada <= 0 and not por_pedido:
-                raise
+        ok = executar_ciclo(sessao, base, str(pedido.get("inicio") or ""), str(pedido.get("fim") or ""))
+        if not ok and args.a_cada <= 0 and not por_pedido:
+            raise RuntimeError("falha na consulta")
         if pedido_id:
             gravar_json(controle_dir() / "feito.json", {"id": pedido_id, "ok": ok})
             ultimo_id = pedido_id
