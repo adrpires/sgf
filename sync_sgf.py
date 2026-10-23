@@ -190,7 +190,15 @@ HTML = """<!DOCTYPE html>
   .legend-dot { width:10px; height:10px; border-radius:3px; display:inline-block; margin-right:4px; }
   .legend-dot.pagar { background:var(--pay); } .legend-dot.receber { background:var(--rec); }
   label { color:var(--muted); font-size:13px; }
-  input[type="date"] { border:1px solid var(--line); border-radius:8px; padding:6px 8px; font:inherit; }
+  input[type="date"], select { border:1px solid var(--line); border-radius:8px; padding:6px 8px; font:inherit; background:#fff; max-width:100%; }
+  select { min-width:260px; }
+  .sessao { margin-top:18px; }
+  .sessao h3 { margin:0 0 8px; font-size:15px; display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+  .sessao h3 em { font-style:normal; color:var(--muted); font-size:12px; font-weight:600; }
+  .totalizador { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; margin:8px 0 0; padding:10px 12px; background:#f8fafc; border:1px solid var(--line); border-radius:10px; font-weight:700; }
+  tfoot td { font-weight:700; background:#f8fafc; }
+  .bar-origem { width:36px; max-width:36px; background:linear-gradient(180deg, var(--pay), #fca5a5); }
+  .bar-valor { font-size:10px; color:var(--muted); text-align:center; }
   .tabela { overflow:auto; max-height:540px; }
   table { width:100%; border-collapse:collapse; }
   th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); font-size:13px; white-space:nowrap; }
@@ -239,6 +247,14 @@ HTML = """<!DOCTYPE html>
     </div>
   </section>
   <section class="panel">
+    <h2>Saídas por origem <em id="origemLegenda">Total do período</em></h2>
+    <div class="chart-wrap">
+      <div class="chart-y-axis" id="origemY"></div>
+      <div class="chart-grid-lines"><div></div><div></div><div></div><div></div><div></div></div>
+      <div class="chart-bars" id="origemBars"></div>
+    </div>
+  </section>
+  <section class="panel">
     <h2>Entradas <em>Recebida e em aberto no mesmo dia</em></h2>
     <div class="tabela"><table>
       <thead><tr><th>Data</th><th>Descrição</th><th class="num">Recebida</th><th class="num">Em aberto</th><th class="num">Total</th></tr></thead>
@@ -247,7 +263,11 @@ HTML = """<!DOCTYPE html>
   </section>
   <section class="panel">
     <h2 id="tituloSaidas">Saídas</h2>
-    <div class="tabela"><table id="tabelaSaidas"></table></div>
+    <div class="row">
+      <label>Descrição / fornecedor <select id="filtroFornecedor"><option value="">Todos</option></select></label>
+    </div>
+    <div class="totalizador" id="totalSaidas"></div>
+    <div id="sessoesSaidas"></div>
   </section>
   <section class="panel">
     <h2>Saldos das contas</h2>
@@ -323,6 +343,56 @@ function renderGrafico(fim) {
   }).join('');
 }
 
+function nomeOrigem(codigo) {
+  if (String(codigo) === '100') return 'ADM | Central';
+  if (!codigo) return 'Sem filial';
+  return 'Filial ' + codigo;
+}
+function ordemOrigem(codigo) {
+  const numero = parseInt(codigo, 10);
+  return Number.isFinite(numero) ? numero : 9999;
+}
+function totaisDe(lista) {
+  return {
+    quantidade: lista.length,
+    valor: soma(lista, 'valor'),
+    pago: soma(lista.filter(item => !item.atipico), 'pago'),
+    aberto: soma(lista.filter(item => !item.pagamento), 'valor')
+  };
+}
+function textoTotais(prefixo, totais) {
+  return esc(prefixo) + ' · ' + totais.quantidade + (totais.quantidade === 1 ? ' título' : ' títulos')
+    + ' · Valor ' + moeda.format(totais.valor)
+    + ' · Pago ' + moeda.format(totais.pago)
+    + ' · Em aberto ' + moeda.format(totais.aberto);
+}
+function renderGraficoOrigem(lista, legenda) {
+  document.getElementById('origemLegenda').textContent = legenda;
+  const grupos = new Map();
+  lista.forEach(item => {
+    const codigo = item.filial || '';
+    grupos.set(codigo, (grupos.get(codigo) || 0) + (Number(item.valor) || 0));
+  });
+  const dados = [...grupos.entries()].sort((a, b) => ordemOrigem(a[0]) - ordemOrigem(b[0]));
+  if (!dados.length) {
+    document.getElementById('origemY').innerHTML = '';
+    document.getElementById('origemBars').innerHTML = '<div class="sub">Sem saídas para este filtro.</div>';
+    return;
+  }
+  const maximo = Math.max(...dados.map(item => item[1]), 1);
+  const escala = Math.ceil(maximo / 1000) * 1000 || 1000;
+  let eixo = '';
+  for (let i = 4; i >= 0; i--) {
+    const valor = (escala / 4) * i;
+    eixo += '<div>' + (valor >= 1000 ? (valor / 1000).toFixed(valor % 1000 === 0 ? 0 : 1) + 'k' : valor.toFixed(0)) + '</div>';
+  }
+  document.getElementById('origemY').innerHTML = eixo;
+  document.getElementById('origemBars').innerHTML = dados.map(item => {
+    const altura = item[1] === 0 ? 0 : Math.max(2, (item[1] / escala) * 100);
+    return '<div class="bar-group"><div class="bar-pair"><div class="bar bar-origem" style="height:' + altura + '%" title="' + esc(nomeOrigem(item[0])) + ': ' + moeda.format(item[1]) + '"></div></div><div class="bar-label">' + esc(nomeOrigem(item[0])) + '<br>' + moeda.format(item[1]) + '</div></div>';
+  }).join('');
+}
+
 function renderAlertas(inicio, fim) {
   const caixa = document.getElementById('alertas');
   if (!caixa) return;
@@ -366,10 +436,22 @@ function render() {
       .finally(() => { if (geracao === geracaoConsulta) { consultaAndamento = ''; render(); } });
   }
   const entradas = linhasDoPeriodo('receber', inicio, fim);
-  const saidasTitulos = titulos.filter(item => dentro(item.vencimento, inicio, fim));
+  const saidasPeriodo = titulos.filter(item => dentro(item.vencimento, inicio, fim));
+  const select = document.getElementById('filtroFornecedor');
+  const selecionadoAntes = select.value;
+  const nomes = [...new Set(saidasPeriodo.map(item => item.fornecedor || ''))].sort((a, b) => a.localeCompare(b, 'pt'));
+  const selecionado = nomes.includes(selecionadoAntes) ? selecionadoAntes : '';
+  select.onchange = null;
+  select.innerHTML = '<option value="">Todos</option>' + nomes.map(nome =>
+    '<option value="' + esc(nome) + '">' + esc(nome || '(Sem descrição)') + '</option>'
+  ).join('');
+  select.value = selecionado;
+  select.onchange = render;
+  select.disabled = !usarTitulos;
+  const saidasTitulos = selecionado ? saidasPeriodo.filter(item => (item.fornecedor || '') === selecionado) : saidasPeriodo;
   const totalEntradas = soma(entradas, 'valor');
-  const totalSaidas = soma(saidasTitulos, 'valor');
-  const abertas = saidasTitulos.filter(item => !item.pagamento);
+  const totais = totaisDe(saidasTitulos);
+  const totalSaidas = totais.valor;
   document.getElementById('receber').textContent = moeda.format(totalEntradas);
   document.getElementById('pagar').textContent = usarTitulos ? moeda.format(totalSaidas) : '...';
   const saldo = totalEntradas - totalSaidas;
@@ -381,31 +463,43 @@ function render() {
     saldoEl.textContent = '...';
     saldoEl.className = '';
   }
-  document.getElementById('abertas').textContent = usarTitulos ? moeda.format(soma(abertas, 'valor')) : '...';
+  document.getElementById('abertas').textContent = usarTitulos ? moeda.format(totais.aberto) : '...';
   renderGrafico(fim);
+  renderGraficoOrigem(usarTitulos ? saidasTitulos : [], selecionado ? selecionado : 'Total do período');
 
   document.getElementById('entradas').innerHTML = agrupar(entradas).map(item =>
     '<tr><td>' + br(item.data) + '</td><td>' + esc(item.descricao) + '</td><td class="num rec">' + moeda.format(item.baixado) + '</td><td class="num">' + moeda.format(item.aberto) + '</td><td class="num">' + moeda.format(item.baixado + item.aberto) + '</td></tr>'
   ).join('') || '<tr><td colspan="5">Nenhuma entrada nesse período.</td></tr>';
 
   const titulo = document.getElementById('tituloSaidas');
-  const tabela = document.getElementById('tabelaSaidas');
+  const sessoes = document.getElementById('sessoesSaidas');
+  const caixaTotal = document.getElementById('totalSaidas');
   if (usarTitulos && falhaPeriodo === chave) {
     titulo.innerHTML = 'Saídas <em>A consulta no SGF não concluiu</em>';
-    tabela.innerHTML = '<tbody><tr><td colspan="10">Não foi possível ler o relatório deste período. Tente buscar de novo.</td></tr></tbody>';
+    caixaTotal.textContent = '';
+    sessoes.innerHTML = '<p>Não foi possível ler o relatório deste período. Tente buscar de novo.</p>';
   } else if (usarTitulos) {
-    titulo.innerHTML = 'Saídas <em>A descrição é o fornecedor do contas a pagar</em>';
-    tabela.innerHTML = '<thead><tr><th>Origem</th><th>Descrição</th><th>Documento</th><th>Emissão</th><th>Vencimento</th><th class="num">Valor</th><th class="num">Pago</th><th class="num">Juros</th><th>Pagamento</th><th>Observação</th></tr></thead><tbody>'
-      + (saidasTitulos.map(item =>
-        '<tr class="' + (item.atipico ? 'atipico' : '') + '"><td>' + (item.filial ? 'Filial ' + esc(item.filial) : '') + '</td><td>' + esc(item.fornecedor) + '</td><td>' + esc(item.documento) + '</td><td>' + br(item.emissao) + '</td><td>' + br(item.vencimento) + '</td><td class="num">' + moedaOuVazio(item.valor) + '</td><td class="num">' + (item.atipico ? 'ilegível' : moedaOuVazio(item.pago)) + '</td><td class="num">' + (item.atipico ? '' : moedaOuVazio(item.juros)) + '</td><td>' + (item.pagamento ? br(item.pagamento) : 'Em aberto') + '</td><td>' + esc(item.obs) + '</td></tr>'
-      ).join('') || '<tr><td colspan="10">Nenhuma saída nesse período.</td></tr>') + '</tbody>';
+    titulo.innerHTML = 'Saídas <em>' + (selecionado ? esc(selecionado) : 'Uma seção por origem') + '</em>';
+    caixaTotal.innerHTML = textoTotais('Total', totais);
+    const origens = [...new Set(saidasTitulos.map(item => item.filial || ''))].sort((a, b) => ordemOrigem(a) - ordemOrigem(b));
+    sessoes.innerHTML = origens.map(codigo => {
+      const linhas = saidasTitulos.filter(item => (item.filial || '') === codigo);
+      const parcial = totaisDe(linhas);
+      return '<section class="sessao"><h3>' + esc(nomeOrigem(codigo)) + '<em>Total ' + moeda.format(parcial.valor) + ' · Em aberto ' + moeda.format(parcial.aberto) + '</em></h3>'
+        + '<div class="tabela"><table><thead><tr><th>Descrição</th><th>Documento</th><th>Emissão</th><th>Vencimento</th><th class="num">Valor</th><th class="num">Pago</th><th class="num">Juros</th><th>Pagamento</th><th>Observação</th></tr></thead><tbody>'
+        + linhas.map(item =>
+          '<tr class="' + (item.atipico ? 'atipico' : '') + '"><td>' + esc(item.fornecedor) + '</td><td>' + esc(item.documento) + '</td><td>' + br(item.emissao) + '</td><td>' + br(item.vencimento) + '</td><td class="num">' + moedaOuVazio(item.valor) + '</td><td class="num">' + (item.atipico ? 'ilegível' : moedaOuVazio(item.pago)) + '</td><td class="num">' + (item.atipico ? '' : moedaOuVazio(item.juros)) + '</td><td>' + (item.pagamento ? br(item.pagamento) : 'Em aberto') + '</td><td>' + esc(item.obs) + '</td></tr>'
+        ).join('')
+        + '</tbody><tfoot><tr><td colspan="4">Total · ' + parcial.quantidade + (parcial.quantidade === 1 ? ' título' : ' títulos') + '</td><td class="num">' + moeda.format(parcial.valor) + '</td><td class="num">' + moeda.format(parcial.pago) + '</td><td></td><td class="num">' + moeda.format(parcial.aberto) + '</td><td></td></tr></tfoot></table></div></section>';
+    }).join('') || '<p>Nenhuma saída nesse período.</p>';
   } else if (consultaAndamento === inicio + '|' + fim) {
     titulo.innerHTML = 'Saídas <em>Consultando o relatório no SGF...</em>';
-    tabela.innerHTML = '<tbody><tr><td>Aguardando a consulta do período no site.</td></tr></tbody>';
+    caixaTotal.textContent = '';
+    sessoes.innerHTML = '<p>Aguardando a consulta do período no site.</p>';
   } else {
-    titulo.innerHTML = 'Saídas <em>Paga e em aberto no mesmo dia</em>';
-    tabela.innerHTML = '<thead><tr><th>Data</th><th>Descrição</th><th class="num">Paga</th><th class="num">Em aberto</th><th class="num">Total</th></tr></thead><tbody>'
-      + '<tr><td colspan="5">Nenhuma saída nesse período.</td></tr></tbody>';
+    titulo.innerHTML = 'Saídas';
+    caixaTotal.textContent = '';
+    sessoes.innerHTML = '<p>Nenhuma saída nesse período.</p>';
   }
 
   document.getElementById('contas').innerHTML = (DADOS.contas || []).map(conta =>
@@ -418,7 +512,7 @@ function render() {
   if (falhaPeriodo === chave) {
     nota += ' A consulta das saídas no SGF não concluiu.';
   } else if (usarTitulos) {
-    nota += ' Nas saídas, a descrição é o nome do fornecedor, como no contas a pagar. A origem é a filial.';
+    nota += ' Nas saídas, cada origem fica em uma seção, com o total da filial. O filtro de descrição mostra só aquele fornecedor e recalcula os totais.';
   } else {
     nota += ' As saídas do período estão sendo consultadas no SGF.';
   }
