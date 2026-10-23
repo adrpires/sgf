@@ -3,7 +3,6 @@ painel_sgf.html
 backup-gestao-financeira-*.json
 api-sgf.pdf
 apoio/*.pdf
-apoio/titulos.json
 __pycache__/
 usuarios.db
 usuarios.db-*

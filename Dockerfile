@@ -4,6 +4,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY sync_sgf.py placeholder.html entrypoint.sh marca.png ./
+COPY apoio/titulos.json ./apoio/titulos.json
 RUN chmod +x /app/entrypoint.sh
 
 ENV SGF_OUT=/data/painel_sgf.html

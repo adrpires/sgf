@@ -336,10 +336,10 @@ function render() {
   const titulo = document.getElementById('tituloSaidas');
   const tabela = document.getElementById('tabelaSaidas');
   if (usarTitulos) {
-    titulo.innerHTML = 'Saídas <em>Títulos por vencimento</em>';
-    tabela.innerHTML = '<thead><tr><th>Fornecedor</th><th>Documento</th><th>Filial</th><th>Emissão</th><th>Vencimento</th><th class="num">Valor</th><th class="num">Pago</th><th class="num">Juros</th><th>Pagamento</th><th>Observação</th></tr></thead><tbody>'
+    titulo.innerHTML = 'Saídas <em>Origem é a filial, destino é quem recebeu</em>';
+    tabela.innerHTML = '<thead><tr><th>Origem</th><th>Destino</th><th>Documento</th><th>Emissão</th><th>Vencimento</th><th class="num">Valor</th><th class="num">Pago</th><th class="num">Juros</th><th>Pagamento</th><th>Observação</th></tr></thead><tbody>'
       + saidasTitulos.map(item =>
-        '<tr class="' + (item.atipico ? 'atipico' : '') + '"><td>' + esc(item.fornecedor) + '</td><td>' + esc(item.documento) + '</td><td>' + esc(item.filial) + '</td><td>' + br(item.emissao) + '</td><td>' + br(item.vencimento) + '</td><td class="num">' + moedaOuVazio(item.valor) + '</td><td class="num">' + (item.atipico ? 'ilegível' : moedaOuVazio(item.pago)) + '</td><td class="num">' + (item.atipico ? '' : moedaOuVazio(item.juros)) + '</td><td>' + (item.pagamento ? br(item.pagamento) : 'Em aberto') + '</td><td>' + esc(item.obs) + '</td></tr>'
+        '<tr class="' + (item.atipico ? 'atipico' : '') + '"><td>' + (item.filial ? 'Filial ' + esc(item.filial) : '') + '</td><td>' + esc(item.fornecedor) + '</td><td>' + esc(item.documento) + '</td><td>' + br(item.emissao) + '</td><td>' + br(item.vencimento) + '</td><td class="num">' + moedaOuVazio(item.valor) + '</td><td class="num">' + (item.atipico ? 'ilegível' : moedaOuVazio(item.pago)) + '</td><td class="num">' + (item.atipico ? '' : moedaOuVazio(item.juros)) + '</td><td>' + (item.pagamento ? br(item.pagamento) : 'Em aberto') + '</td><td>' + esc(item.obs) + '</td></tr>'
       ).join('') + '</tbody>';
   } else {
     titulo.innerHTML = 'Saídas <em>Paga e em aberto no mesmo dia</em>';
@@ -358,7 +358,7 @@ function render() {
   let nota = 'O SGF separa cada dia em duas partes: o que já foi baixado e o que continua em aberto. A tabela junta as duas na mesma linha.';
   if (usarTitulos) {
     const cobertura = br(vencimentos[0]) + ' a ' + br(vencimentos[vencimentos.length - 1]);
-    nota += ' As saídas deste período saem do relatório de títulos, com vencimento de ' + cobertura + '.';
+    nota += ' Nas saídas, a origem é a filial e o destino é quem recebeu, como no relatório. Período dos títulos: ' + cobertura + '.';
   } else {
     nota += ' As saídas são o total diário de despesas. O nome do fornecedor aparece quando o relatório de títulos está no servidor.';
   }
