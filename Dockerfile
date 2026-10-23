@@ -8,6 +8,7 @@ RUN chmod +x /app/entrypoint.sh
 
 ENV SGF_OUT=/data/painel_sgf.html
 ENV SGF_NO_SANDBOX=1
+ENV SGF_A_CADA=30
 
 USER root
 ENTRYPOINT ["/app/entrypoint.sh"]
