@@ -259,7 +259,10 @@ HTML = """<!DOCTYPE html>
 const DADOS = __DADOS__;
 const METAS = __METAS__;
 const moeda = new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'});
-let titulos = [];
+const titulosEmbutidos = DADOS.titulos || [];
+const coberturaInicio = DADOS.titulosInicio || '';
+const coberturaFim = DADOS.titulosFim || '';
+let titulosConsulta = null;
 let periodoPronto = '';
 let consultaAndamento = '';
 let falhaPeriodo = '';
@@ -338,31 +341,32 @@ function render() {
   const fim = document.getElementById('fim').value;
   renderAlertas(inicio, fim);
   const chave = inicio + '|' + fim;
-  if (inicio && fim && chave !== periodoPronto && consultaAndamento !== chave) {
+  const coberto = coberturaInicio && coberturaFim && inicio >= coberturaInicio && fim <= coberturaFim;
+  const titulos = periodoPronto === chave ? (titulosConsulta || []) : (coberto ? titulosEmbutidos : []);
+  const usarTitulos = periodoPronto === chave || (coberto && periodoPronto !== chave && consultaAndamento !== chave);
+  if (inicio && fim && !coberto && chave !== periodoPronto && consultaAndamento !== chave) {
     consultaAndamento = chave;
     const geracao = ++geracaoConsulta;
-    titulos = [];
     const aviso = document.getElementById('tituloSaidas');
     if (aviso) aviso.innerHTML = 'Saídas <em>Consultando o relatório no SGF...</em>';
     fetch('/saidas?inicio=' + encodeURIComponent(inicio) + '&fim=' + encodeURIComponent(fim))
       .then(resposta => resposta.json())
       .then(dados => {
         if (geracao !== geracaoConsulta) return;
-        titulos = (dados && dados.ok) ? (dados.titulos || []) : [];
+        titulosConsulta = (dados && dados.ok) ? (dados.titulos || []) : [];
         falhaPeriodo = (dados && dados.ok) ? '' : chave;
         periodoPronto = chave;
       })
       .catch(() => {
         if (geracao !== geracaoConsulta) return;
-        titulos = [];
+        titulosConsulta = [];
         falhaPeriodo = chave;
         periodoPronto = chave;
       })
       .finally(() => { if (geracao === geracaoConsulta) { consultaAndamento = ''; render(); } });
   }
   const entradas = linhasDoPeriodo('receber', inicio, fim);
-  const saidasTitulos = (periodoPronto === chave ? titulos : []).filter(item => dentro(item.vencimento, inicio, fim));
-  const usarTitulos = periodoPronto === chave;
+  const saidasTitulos = titulos.filter(item => dentro(item.vencimento, inicio, fim));
   const totalEntradas = soma(entradas, 'valor');
   const totalSaidas = soma(saidasTitulos, 'valor');
   const abertas = saidasTitulos.filter(item => !item.pagamento);
@@ -390,8 +394,8 @@ function render() {
     titulo.innerHTML = 'Saídas <em>A consulta no SGF não concluiu</em>';
     tabela.innerHTML = '<tbody><tr><td colspan="10">Não foi possível ler o relatório deste período. Tente buscar de novo.</td></tr></tbody>';
   } else if (usarTitulos) {
-    titulo.innerHTML = 'Saídas <em>Origem é a filial, destino é quem recebeu</em>';
-    tabela.innerHTML = '<thead><tr><th>Origem</th><th>Destino</th><th>Documento</th><th>Emissão</th><th>Vencimento</th><th class="num">Valor</th><th class="num">Pago</th><th class="num">Juros</th><th>Pagamento</th><th>Observação</th></tr></thead><tbody>'
+    titulo.innerHTML = 'Saídas <em>A descrição é o fornecedor do contas a pagar</em>';
+    tabela.innerHTML = '<thead><tr><th>Origem</th><th>Descrição</th><th>Documento</th><th>Emissão</th><th>Vencimento</th><th class="num">Valor</th><th class="num">Pago</th><th class="num">Juros</th><th>Pagamento</th><th>Observação</th></tr></thead><tbody>'
       + (saidasTitulos.map(item =>
         '<tr class="' + (item.atipico ? 'atipico' : '') + '"><td>' + (item.filial ? 'Filial ' + esc(item.filial) : '') + '</td><td>' + esc(item.fornecedor) + '</td><td>' + esc(item.documento) + '</td><td>' + br(item.emissao) + '</td><td>' + br(item.vencimento) + '</td><td class="num">' + moedaOuVazio(item.valor) + '</td><td class="num">' + (item.atipico ? 'ilegível' : moedaOuVazio(item.pago)) + '</td><td class="num">' + (item.atipico ? '' : moedaOuVazio(item.juros)) + '</td><td>' + (item.pagamento ? br(item.pagamento) : 'Em aberto') + '</td><td>' + esc(item.obs) + '</td></tr>'
       ).join('') || '<tr><td colspan="10">Nenhuma saída nesse período.</td></tr>') + '</tbody>';
@@ -414,7 +418,7 @@ function render() {
   if (falhaPeriodo === chave) {
     nota += ' A consulta das saídas no SGF não concluiu.';
   } else if (usarTitulos) {
-    nota += ' As saídas deste período vêm do relatório do SGF, consultado na hora. A origem é a filial e o destino é quem recebeu.';
+    nota += ' Nas saídas, a descrição é o nome do fornecedor, como no contas a pagar. A origem é a filial.';
   } else {
     nota += ' As saídas do período estão sendo consultadas no SGF.';
   }
@@ -520,7 +524,7 @@ def logo_data():
 
 def gravar(payload, filial):
     payload["filial"] = filial
-    payload["titulos"] = []
+    payload.setdefault("titulos", [])
     html = HTML.replace("__DADOS__", json.dumps(payload, ensure_ascii=False)).replace("__LOGO__", logo_data())
     arquivo = destino()
     arquivo.parent.mkdir(parents=True, exist_ok=True)
@@ -671,6 +675,18 @@ class Sessao:
 def ciclo(base, user, password, sessao):
     sessao.garantir(user, password)
     payload = coletar(base, sessao.token)
+    hoje = date.today()
+    inicio = hoje.replace(day=1).isoformat()
+    fim = hoje.isoformat()
+    try:
+        payload["titulos"] = sessao.consultar(inicio, fim)
+        payload["titulosInicio"] = inicio
+        payload["titulosFim"] = fim
+    except Exception as exc:
+        print("falha relatorio", type(exc).__name__)
+        payload["titulos"] = []
+        payload["titulosInicio"] = ""
+        payload["titulosFim"] = ""
     gravar(payload, sessao.filial)
 
 
