@@ -215,7 +215,19 @@ HTML = """<!DOCTYPE html>
   .alerta-verde { background:#e7f6ee; border:1px solid #059669; color:#067647; }
   .alerta-vermelho { background:#fde8e6; border:1px solid #dc2626; color:#b42318; }
   #alertas:empty { display:none; }
-  @media (max-width:800px) { .cards { grid-template-columns:1fr 1fr; } }
+  .charts-row { display:flex; gap:12px; align-items:stretch; }
+  .charts-row > .panel { flex:1 1 0; min-width:0; }
+  .charts-row .panel h2 { flex-wrap:wrap; }
+  .chart-line { width:100%; height:240px; }
+  .chart-line svg { width:100%; height:100%; display:block; }
+  .chart-legend { flex-wrap:wrap; }
+  .serie-alerta { font-weight:800; }
+  #avisosMeta:empty { display:none; }
+  @media (max-width:800px) {
+    .cards { grid-template-columns:1fr 1fr; }
+    .charts-row { flex-direction:column; }
+    .charts-row > .panel { flex-basis:auto; width:100%; }
+  }
 </style>
 </head>
 <body>
@@ -242,6 +254,7 @@ HTML = """<!DOCTYPE html>
     <div class="card"><span>Saldo</span><strong id="saldo"></strong></div>
     <div class="card"><span>Saídas em aberto</span><strong class="pay" id="abertas"></strong></div>
   </div>
+  <div class="charts-row">
   <section class="panel">
     <h2>Comparativo dos últimos 6 meses <em>Entradas e saídas</em></h2>
     <div class="chart-wrap">
@@ -254,6 +267,13 @@ HTML = """<!DOCTYPE html>
       <span><span class="legend-dot receber"></span>Entradas</span>
     </div>
   </section>
+  <section class="panel">
+    <h2>Meta mensal por origem <em id="metaLegenda">Percentual da meta</em></h2>
+    <div id="avisosMeta"></div>
+    <div class="chart-line" id="metaChart"></div>
+    <div class="chart-legend" id="metaLegend"></div>
+  </section>
+  </div>
   <section class="panel">
     <h2>Saídas por origem <em id="origemLegenda">Total do período</em></h2>
     <div class="chart-wrap">
@@ -286,6 +306,7 @@ HTML = """<!DOCTYPE html>
 <script>
 const DADOS = __DADOS__;
 const METAS = __METAS__;
+const METAS_ORIGEM = __METAS_ORIGEM__;
 const CSRF = "__CSRF__";
 const moeda = new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'});
 const titulosEmbutidos = DADOS.titulos || [];
@@ -397,6 +418,132 @@ function renderGraficoOrigem(lista, legenda) {
   }).join('');
 }
 
+function chaveMes(data) {
+  return data.getFullYear() + '-' + String(data.getMonth() + 1).padStart(2, '0');
+}
+function serieMeses(fim) {
+  const base = new Date(fim + 'T12:00:00');
+  const lista = [];
+  for (let i = 5; i >= 0; i--) {
+    const data = new Date(base.getFullYear(), base.getMonth() - i, 1);
+    lista.push({chave: chaveMes(data), label: meses[data.getMonth()] + '/' + String(data.getFullYear()).slice(2)});
+  }
+  return lista;
+}
+function fimDoMes(chave) {
+  const partes = chave.split('-');
+  const dia = new Date(Number(partes[0]), Number(partes[1]), 0).getDate();
+  return chave + '-' + String(dia).padStart(2, '0');
+}
+function mesCoberto(chave) {
+  if (!coberturaInicio || !coberturaFim) return false;
+  return fimDoMes(chave) >= coberturaInicio && (chave + '-01') <= coberturaFim;
+}
+function textoPct(valor) {
+  const arred = Math.round(valor * 10) / 10;
+  return (Number.isInteger(arred) ? String(arred) : arred.toFixed(1).replace('.', ',')) + '%';
+}
+function renderGraficoMetas(fim) {
+  const caixa = document.getElementById('metaChart');
+  const avisos = document.getElementById('avisosMeta');
+  const legenda = document.getElementById('metaLegend');
+  const titulo = document.getElementById('metaLegenda');
+  if (!caixa || !avisos || !legenda) return;
+  const config = METAS_ORIGEM || {percentual: null, itens: []};
+  const itens = (config.itens || []).filter(item => Number(item.valor) > 0);
+  const limite = Number(config.percentual);
+  const limiteOk = Number.isFinite(limite) && limite >= 1 && limite <= 100;
+  if (!itens.length) {
+    caixa.innerHTML = '<p class="sub">Nenhuma meta mensal definida.</p>';
+    avisos.innerHTML = '';
+    legenda.innerHTML = '';
+    if (titulo) titulo.textContent = 'Percentual da meta';
+    return;
+  }
+  const serie = serieMeses(fim || coberturaFim || chaveMes(new Date()));
+  const hoje = chaveMes(new Date());
+  const neutras = ['#94a3b8', '#64748b', '#475569', '#cbd5e1', '#334155'];
+  const alertasCor = ['#dc2626', '#c2410c', '#7c3aed', '#be185d', '#b45309'];
+  const series = itens.map(item => {
+    const codigo = String(item.origem ?? '');
+    const meta = Number(item.valor);
+    const pontos = serie.map(mes => {
+      if (!mesCoberto(mes.chave)) return {chave: mes.chave, label: mes.label, nulo: true};
+      const realizado = soma(titulosEmbutidos.filter(titulo => String(titulo.filial || '') === codigo && String(titulo.vencimento || '').startsWith(mes.chave)), 'valor');
+      return {chave: mes.chave, label: mes.label, nulo: false, pct: (realizado / meta) * 100, realizado: realizado};
+    });
+    const atual = pontos.find(ponto => ponto.chave === hoje && !ponto.nulo) || null;
+    return {codigo: codigo, nome: nomeOrigem(codigo), meta: meta, pontos: pontos, atual: atual, estourou: !!(limiteOk && atual && atual.pct >= limite)};
+  }).sort((a, b) => ordemOrigem(a.codigo) - ordemOrigem(b.codigo));
+  const valores = series.flatMap(item => item.pontos.filter(ponto => !ponto.nulo).map(ponto => ponto.pct));
+  const topo = Math.max(100, limiteOk ? limite : 0, ...valores, 1);
+  const escala = Math.ceil(topo / 10) * 10;
+  const largura = 320;
+  const altura = 200;
+  const esquerda = 36;
+  const direita = 8;
+  const topoPx = 16;
+  const basePx = 28;
+  const plotW = largura - esquerda - direita;
+  const plotH = altura - topoPx - basePx;
+  const xDe = indice => serie.length === 1 ? esquerda + plotW / 2 : esquerda + (plotW * indice) / (serie.length - 1);
+  const yDe = pct => topoPx + plotH - (pct / escala) * plotH;
+  let svg = '<svg viewBox="0 0 ' + largura + ' ' + altura + '" role="img" aria-label="Percentual da meta mensal por origem">';
+  for (let i = 0; i <= 4; i++) {
+    const valor = (escala / 4) * i;
+    const y = yDe(valor);
+    svg += '<line x1="' + esquerda + '" y1="' + y.toFixed(1) + '" x2="' + (largura - direita) + '" y2="' + y.toFixed(1) + '" stroke="#e2e9f2"></line>';
+    svg += '<text x="' + (esquerda - 4) + '" y="' + (y + 3).toFixed(1) + '" text-anchor="end" fill="#5c6b80" font-size="10">' + Math.round(valor) + '%</text>';
+  }
+  if (limiteOk) {
+    const yLimite = yDe(limite);
+    svg += '<line class="limite-meta" x1="' + esquerda + '" y1="' + yLimite.toFixed(1) + '" x2="' + (largura - direita) + '" y2="' + yLimite.toFixed(1) + '" stroke="#64748b" stroke-dasharray="5 4" stroke-width="1.5"></line>';
+  }
+  let indiceNeutra = 0;
+  let indiceAlerta = 0;
+  series.forEach(item => {
+    const cor = item.estourou ? alertasCor[indiceAlerta++ % alertasCor.length] : neutras[indiceNeutra++ % neutras.length];
+    item.cor = cor;
+    let caminho = '';
+    let mover = true;
+    item.pontos.forEach((ponto, indice) => {
+      if (ponto.nulo) { mover = true; return; }
+      const x = xDe(indice);
+      const y = yDe(ponto.pct);
+      caminho += (mover ? 'M' : 'L') + x.toFixed(1) + ' ' + y.toFixed(1) + ' ';
+      mover = false;
+    });
+    svg += '<g class="' + (item.estourou ? 'serie-alerta' : 'serie-neutra') + '" data-origem="' + esc(item.codigo) + '" data-alerta="' + (item.estourou ? '1' : '0') + '">';
+    if (caminho) svg += '<path d="' + caminho.trim() + '" fill="none" stroke="' + cor + '" stroke-width="' + (item.estourou ? '3' : '1.75') + '" stroke-linejoin="round" stroke-linecap="round"></path>';
+    item.pontos.forEach((ponto, indice) => {
+      if (ponto.nulo) return;
+      const x = xDe(indice);
+      const y = yDe(ponto.pct);
+      const alertaPonto = item.estourou && ponto.chave === hoje;
+      svg += '<circle class="' + (alertaPonto ? 'ponto-alerta' : 'ponto-neutro') + '" cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1) + '" r="' + (alertaPonto ? '5.5' : '3') + '" fill="' + cor + '"' + (alertaPonto ? ' stroke="#fff" stroke-width="2"' : '') + '><title>' + esc(item.nome) + ' · ' + esc(ponto.label) + ' · ' + moeda.format(ponto.realizado) + ' · ' + textoPct(ponto.pct) + '</title></circle>';
+      if (alertaPonto) svg += '<text x="' + x.toFixed(1) + '" y="' + Math.max(12, y - 8).toFixed(1) + '" text-anchor="middle" fill="' + cor + '" font-size="11" font-weight="700">' + textoPct(ponto.pct) + '</text>';
+    });
+    svg += '</g>';
+  });
+  serie.forEach((mes, indice) => {
+    svg += '<text x="' + xDe(indice).toFixed(1) + '" y="' + (altura - 8) + '" text-anchor="middle" font-size="10" fill="' + (mes.chave === hoje ? '#1d4ed8' : '#5c6b80') + '">' + esc(mes.label) + '</text>';
+  });
+  svg += '</svg>';
+  caixa.innerHTML = svg;
+  avisos.innerHTML = series.filter(item => item.estourou).map(item =>
+    '<div class="alerta alerta-vermelho" data-alerta="1" data-origem="' + esc(item.codigo) + '">' + esc(item.nome) + ' atingiu ' + textoPct(item.atual.pct) + ' da meta neste mês.</div>'
+  ).join('');
+  legenda.innerHTML = series.map(item => {
+    const atual = item.pontos.find(ponto => ponto.chave === hoje && !ponto.nulo);
+    return '<span class="' + (item.estourou ? 'serie-alerta' : 'serie-neutra') + '" data-origem="' + esc(item.codigo) + '" data-alerta="' + (item.estourou ? '1' : '0') + '"><span class="legend-dot" style="background:' + item.cor + '"></span>' + esc(item.nome) + (atual ? ' · ' + textoPct(atual.pct) : '') + '</span>';
+  }).join('');
+  if (titulo) {
+    let texto = limiteOk ? 'Aviso em ' + textoPct(limite) : 'Defina o percentual de aviso';
+    if (serie.some(mes => !mesCoberto(mes.chave))) texto += ' · sem ponto fora do sincronismo';
+    titulo.textContent = texto;
+  }
+}
+
 function renderAlertas(inicio, fim) {
   const caixa = document.getElementById('alertas');
   if (!caixa) return;
@@ -439,6 +586,7 @@ function render() {
   saldoEl.className = saldo >= 0 ? 'rec' : 'pay';
   document.getElementById('abertas').textContent = moeda.format(totais.aberto);
   renderGrafico(fim);
+  renderGraficoMetas(fim);
   renderGraficoOrigem(saidasTitulos, selecionado ? selecionado : 'Total do período');
 
   document.getElementById('entradas').innerHTML = agrupar(entradas).map(item =>

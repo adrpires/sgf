@@ -14,47 +14,37 @@
   </span>
 </header>
 <main>
-  <h1>Metas por categoria</h1>
-  <p>A meta vale para o período escolhido no relatório. Receita atingida fica verde. Despesa atingida fica vermelha.</p>
+  <h1>Metas por origem</h1>
+  <p>Cada meta é o valor mensal de saídas da origem, em reais. O mesmo valor vale em todos os meses: quando o mês vira, a conta recomeça.</p>
+  <p>O percentual de aviso é único para o sistema. Quando as saídas do mês chegam nesse percentual da meta, o gráfico do painel destaca a origem.</p>
   {% if erro %}<div class="erro">{{ erro }}</div>{% endif %}
   {% if aviso %}<div class="aviso">{{ aviso }}</div>{% endif %}
   <form class="card" method="post">
     <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label>Tipo</label>
-    <select name="tipo">
-      <option value="receber">Receita</option>
-      <option value="pagar">Despesa</option>
-    </select>
-    <label>Categoria</label>
-    <input name="categoria" list="categorias" required maxlength="80" placeholder="Como aparece no relatório">
-    <datalist id="categorias">
-      {% for item in categorias %}
-      <option value="{{ item.descricao }}">{{ "Receita" if item.tipo == "receber" else "Despesa" }}</option>
+    <label for="percentual">Percentual de aviso (%)</label>
+    <input id="percentual" name="percentual" required inputmode="decimal" maxlength="6" placeholder="80" value="{{ percentual }}">
+    {% if linhas %}
+    <table style="margin-top:16px">
+      <thead><tr><th>Origem</th><th>Meta mensal (R$)</th></tr></thead>
+      <tbody>
+      {% for item in linhas %}
+        <tr>
+          <td>
+            {{ item.nome }}
+            {% if not item.no_painel %}<div style="color:#5c6b80;font-size:12px">Fora do último sincronismo</div>{% endif %}
+          </td>
+          <td>
+            <input type="hidden" name="origem" value="{{ item.codigo }}">
+            <input name="valor" inputmode="decimal" maxlength="18" placeholder="0,00" value="{{ item.texto }}" aria-label="Meta mensal de {{ item.nome }}">
+          </td>
+        </tr>
       {% endfor %}
-    </datalist>
-    <label>Meta (R$)</label>
-    <input name="valor" required inputmode="decimal" placeholder="0,00">
+      </tbody>
+    </table>
+    {% else %}
+    <p>Nenhuma origem no último sincronismo. O percentual já pode ser salvo; as filiais aparecem aqui depois de atualizar o painel.</p>
+    {% endif %}
     <button type="submit">Salvar</button>
   </form>
-  <table style="margin-top:16px">
-    <thead><tr><th>Tipo</th><th>Categoria</th><th>Meta</th><th></th></tr></thead>
-    <tbody>
-    {% for item in metas %}
-      <tr>
-        <td>{{ "Receita" if item.tipo == "receber" else "Despesa" }}</td>
-        <td>{{ item.categoria }}</td>
-        <td>{{ moeda(item.valor) }}</td>
-        <td>
-          <form method="post" action="/metas/{{ item.id }}/excluir" style="margin:0">
-            <input type="hidden" name="csrf" value="{{ csrf }}">
-            <button class="claro" type="submit" style="margin:0">Excluir</button>
-          </form>
-        </td>
-      </tr>
-    {% else %}
-      <tr><td colspan="4">Nenhuma meta definida.</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
 </main>
 {% endblock %}
