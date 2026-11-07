@@ -11,6 +11,11 @@ from playwright.sync_api import sync_playwright
 
 BASE_DEFAULT = "http://45.160.125.114:4647/sgfpod1"
 ATIPICO = 1_000_000
+FORTALEZA = timezone(timedelta(hours=-3))
+
+
+def agora_fortaleza():
+    return datetime.now(FORTALEZA).isoformat(timespec="seconds")
 
 
 def destino():
@@ -133,7 +138,7 @@ def coletar(base, token):
         )
     linhas.sort(key=lambda item: (item["data"] or "", item["tipo"], item["descricao"]))
     return {
-        "geradoEm": datetime.now().isoformat(timespec="seconds"),
+        "geradoEm": agora_fortaleza(),
         "inicio": inicio.isoformat(),
         "fim": fim.isoformat(),
         "contas": [
@@ -192,9 +197,21 @@ HTML = """<!DOCTYPE html>
   label { color:var(--muted); font-size:13px; }
   input[type="date"], select { border:1px solid var(--line); border-radius:8px; padding:6px 8px; font:inherit; background:#fff; max-width:100%; }
   select { min-width:260px; }
-  .sessao { margin-top:16px; border:1px solid var(--line); border-left:4px solid var(--pay); border-radius:12px; padding:12px 12px 4px; background:#fff; }
-  .sessao h3 { margin:0 0 8px; font-size:16px; display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; }
-  .sessao h3 em { font-style:normal; color:var(--muted); font-size:12px; font-weight:600; }
+  .sessao { margin-top:16px; border:1px solid var(--line); border-left:4px solid var(--pay); border-radius:12px; padding:0; background:#fff; }
+  .sessao summary { cursor:pointer; display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; align-items:center; padding:12px; font-weight:700; font-size:16px; }
+  .sessao summary::-webkit-details-marker { display:none; }
+  .sessao summary::before { content:"▸"; color:var(--muted); margin-right:8px; }
+  .sessao[open] summary::before { content:"▾"; }
+  .sessao summary em { font-style:normal; color:var(--muted); font-size:12px; font-weight:600; }
+  .sessao .tabela { margin:0 12px 12px; }
+  .check-inline { display:flex; align-items:center; gap:6px; }
+  .check-inline input { width:auto; }
+  .chart-scroll { overflow:auto; max-width:100%; }
+  .chart-scroll svg { display:block; }
+  .loja-bloco { margin-top:16px; }
+  .loja-bloco h3 { margin:0 0 6px; font-size:15px; }
+  .origem-nota { color:var(--muted); font-size:13px; margin:8px 0 0; }
+  .origem-nota:empty { display:none; }
   button#atualizar { background:var(--accent); color:#fff; border-color:var(--accent); font-weight:700; }
   button#atualizar:disabled { opacity:.65; cursor:wait; }
   .idade-sync { color:var(--muted); font-size:13px; font-weight:600; }
@@ -281,9 +298,22 @@ HTML = """<!DOCTYPE html>
       <div class="chart-grid-lines"><div></div><div></div><div></div><div></div><div></div></div>
       <div class="chart-bars" id="origemBars"></div>
     </div>
+    <p id="origemNota" class="origem-nota"></p>
   </section>
   <section class="panel">
-    <h2>Entradas <em>Recebida e em aberto no mesmo dia</em></h2>
+    <h2>Fornecedores por loja <em id="fornecedorLojaLegenda">Uma coluna por fornecedor em cada local</em></h2>
+    <div id="graficosLoja"></div>
+  </section>
+  <section class="panel">
+    <h2>Fornecedores <em>Soma de todas as lojas</em></h2>
+    <div id="graficoFornecedores"></div>
+  </section>
+  <section class="panel">
+    <h2>Pendentes por mês <em>Títulos em aberto, pelo mês de vencimento</em></h2>
+    <div id="graficoPendentes"></div>
+  </section>
+  <section class="panel">
+    <h2>Entradas <em>Receitas da classificação financeira do SGF, somadas por dia. Esse relatório não separa por loja.</em></h2>
     <div class="tabela"><table>
       <thead><tr><th>Data</th><th>Descrição</th><th class="num">Recebida</th><th class="num">Em aberto</th><th class="num">Total</th></tr></thead>
       <tbody id="entradas"></tbody>
@@ -293,6 +323,7 @@ HTML = """<!DOCTYPE html>
     <h2 id="tituloSaidas">Saídas</h2>
     <div class="row">
       <label>Descrição / fornecedor <select id="filtroFornecedor"><option value="">Todos</option></select></label>
+      <label class="check-inline"><input id="soPendentes" type="checkbox"> Só pendentes</label>
     </div>
     <div class="totalizador" id="totalSaidas"></div>
     <div id="sessoesSaidas"></div>
@@ -367,14 +398,24 @@ function renderGrafico(fim) {
   }).join('');
 }
 
+function codigoOrigem(codigo) {
+  const texto = String(codigo ?? '').trim();
+  if (/^\\d+$/.test(texto)) return String(parseInt(texto, 10));
+  return texto;
+}
 function nomeOrigem(codigo) {
-  if (String(codigo) === '100') return 'ADM | Central';
-  if (!codigo) return 'Sem filial';
-  return 'Filial ' + codigo;
+  const normal = codigoOrigem(codigo);
+  if (normal === '100') return 'ADM | Central';
+  if (normal === '1') return 'Matriz';
+  if (!normal) return 'Sem filial';
+  return 'Filial ' + normal;
 }
 function ordemOrigem(codigo) {
-  const numero = parseInt(codigo, 10);
-  return Number.isFinite(numero) ? numero : 9999;
+  const normal = codigoOrigem(codigo);
+  if (normal === '1') return 0;
+  if (normal === '100') return 1;
+  const numero = parseInt(normal, 10);
+  return Number.isFinite(numero) ? numero + 1 : 9999;
 }
 function totaisDe(lista) {
   return {
@@ -394,7 +435,7 @@ function renderGraficoOrigem(lista, legenda) {
   document.getElementById('origemLegenda').textContent = legenda;
   const grupos = new Map();
   lista.forEach(item => {
-    const codigo = item.filial || '';
+    const codigo = codigoOrigem(item.filial);
     grupos.set(codigo, (grupos.get(codigo) || 0) + (Number(item.valor) || 0));
   });
   const dados = [...grupos.entries()].sort((a, b) => ordemOrigem(a[0]) - ordemOrigem(b[0]));
@@ -415,6 +456,119 @@ function renderGraficoOrigem(lista, legenda) {
     const altura = item[1] === 0 ? 0 : Math.max(2, (item[1] / escala) * 100);
     return '<div class="bar-group"><div class="bar-pair"><div class="bar bar-origem" style="height:' + altura + '%" title="' + esc(nomeOrigem(item[0])) + ': ' + moeda.format(item[1]) + '"></div></div><div class="bar-label">' + esc(nomeOrigem(item[0])) + '<br>' + moeda.format(item[1]) + '</div></div>';
   }).join('');
+}
+function notaOrigem(lista) {
+  const nota = document.getElementById('origemNota');
+  if (!nota) return;
+  const codigos = new Set(lista.map(item => codigoOrigem(item.filial)));
+  const todos = new Set(titulosEmbutidos.map(item => codigoOrigem(item.filial)));
+  if (!todos.has('1')) {
+    nota.textContent = 'A matriz é a filial 1 no contas a pagar. Esse código não veio no último sincronismo, por isso o gráfico não tem a coluna da matriz.';
+    return;
+  }
+  if (!codigos.has('1')) {
+    nota.textContent = 'A matriz tem títulos no sincronismo, fora do período ou do filtro desta tela.';
+    return;
+  }
+  nota.textContent = '';
+}
+function gruposFornecedor(lista) {
+  const mapa = new Map();
+  lista.forEach(item => {
+    const nome = item.fornecedor || '(Sem fornecedor)';
+    mapa.set(nome, (mapa.get(nome) || 0) + (Number(item.valor) || 0));
+  });
+  return [...mapa.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'pt'));
+}
+function escalaMil(maximo) {
+  return Math.ceil(Math.max(maximo, 1) / 1000) * 1000 || 1000;
+}
+function textoEixo(valor) {
+  if (valor >= 1000) return (valor / 1000).toFixed(valor % 1000 === 0 ? 0 : 1) + 'k';
+  return valor.toFixed(0);
+}
+function svgColunas(dados, girar) {
+  if (!dados.length) return '<p>Nenhum valor neste recorte.</p>';
+  const maior = dados.reduce((maximo, item) => Math.max(maximo, String(item[0]).length), 0);
+  const larguraBarra = 28;
+  const passo = girar ? Math.max(64, Math.min(120, 22 + maior * 3.4)) : 72;
+  const esquerda = 52;
+  const topo = 16;
+  const alturaPlot = 150;
+  const alturaRotulo = girar ? Math.max(120, Math.min(220, 28 + maior * 5.5)) : 40;
+  const altura = topo + alturaPlot + 8 + alturaRotulo;
+  const largura = Math.max(esquerda + dados.length * passo + 24, 280);
+  const escala = escalaMil(Math.max(...dados.map(item => item[1])));
+  let svg = '<svg width="' + largura + '" height="' + altura + '" role="img">';
+  for (let i = 0; i <= 4; i++) {
+    const valor = (escala / 4) * i;
+    const y = topo + alturaPlot - (valor / escala) * alturaPlot;
+    svg += '<line x1="' + esquerda + '" y1="' + y.toFixed(1) + '" x2="' + (largura - 8) + '" y2="' + y.toFixed(1) + '" stroke="#e2e9f2" stroke-dasharray="4 4"></line>';
+    svg += '<text x="' + (esquerda - 6) + '" y="' + (y + 3).toFixed(1) + '" text-anchor="end" fill="#5c6b80" font-size="10">' + textoEixo(valor) + '</text>';
+  }
+  dados.forEach((item, indice) => {
+    const x = esquerda + indice * passo + (passo - larguraBarra) / 2;
+    const alturaBarra = item[1] === 0 ? 0 : Math.max(2, (item[1] / escala) * alturaPlot);
+    const y = topo + alturaPlot - alturaBarra;
+    const centro = x + larguraBarra / 2;
+    svg += '<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + larguraBarra + '" height="' + alturaBarra.toFixed(1) + '" rx="4" fill="#dc2626"><title>' + esc(item[0]) + ' · ' + moeda.format(item[1]) + '</title></rect>';
+    if (alturaBarra > 16) {
+      svg += '<text x="' + centro.toFixed(1) + '" y="' + (y - 4).toFixed(1) + '" text-anchor="middle" fill="#5c6b80" font-size="10">' + textoEixo(item[1]) + '</text>';
+    }
+    const ty = topo + alturaPlot + 14;
+    if (girar) {
+      svg += '<text transform="rotate(45 ' + centro.toFixed(1) + ' ' + ty + ')" x="' + centro.toFixed(1) + '" y="' + ty + '" text-anchor="start" fill="#102033" font-size="11"><title>' + esc(item[0]) + '</title>' + esc(item[0]) + '</text>';
+    } else {
+      svg += '<text x="' + centro.toFixed(1) + '" y="' + (ty + 4) + '" text-anchor="middle" fill="#102033" font-size="11">' + esc(item[0]) + '</text>';
+    }
+  });
+  svg += '</svg>';
+  return '<div class="chart-scroll">' + svg + '</div>';
+}
+function renderFornecedores(lista) {
+  const lojas = document.getElementById('graficosLoja');
+  const geral = document.getElementById('graficoFornecedores');
+  const legenda = document.getElementById('fornecedorLojaLegenda');
+  if (!lojas || !geral) return;
+  const codigos = [...new Set(lista.map(item => codigoOrigem(item.filial)))].sort((a, b) => ordemOrigem(a) - ordemOrigem(b));
+  lojas.innerHTML = codigos.map(codigo => {
+    const linhas = lista.filter(item => codigoOrigem(item.filial) === codigo);
+    return '<section class="loja-bloco"><h3>' + esc(nomeOrigem(codigo)) + '</h3>' + svgColunas(gruposFornecedor(linhas), true) + '</section>';
+  }).join('') || '<p>Nenhuma saída neste recorte.</p>';
+  geral.innerHTML = svgColunas(gruposFornecedor(lista), true);
+  if (legenda) legenda.textContent = codigos.length ? codigos.length + (codigos.length === 1 ? ' local' : ' locais') : 'Nenhum local neste recorte';
+}
+function mesesDoRecorte(inicio, fim, chaves) {
+  const lista = [...chaves].filter(Boolean).sort();
+  if (!lista.length) return [];
+  const de = (inicio || lista[0]).slice(0, 7);
+  const ate = (fim || lista[lista.length - 1]).slice(0, 7);
+  const cursor = new Date(de + '-01T12:00:00');
+  const limite = new Date(ate + '-01T12:00:00');
+  const saida = [];
+  while (cursor <= limite && saida.length < 36) {
+    const chave = chaveMes(cursor);
+    saida.push({chave: chave, label: meses[cursor.getMonth()] + '/' + String(cursor.getFullYear()).slice(2)});
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+  return saida;
+}
+function renderPendentesMes(lista, inicio, fim) {
+  const caixa = document.getElementById('graficoPendentes');
+  if (!caixa) return;
+  const abertos = lista.filter(item => !item.pagamento && !item.atipico);
+  const mapa = new Map();
+  abertos.forEach(item => {
+    const chave = String(item.vencimento || '').slice(0, 7);
+    if (!chave) return;
+    mapa.set(chave, (mapa.get(chave) || 0) + (Number(item.valor) || 0));
+  });
+  const serie = mesesDoRecorte(inicio, fim, mapa.keys());
+  if (!serie.length) {
+    caixa.innerHTML = '<p>Nenhum título em aberto neste período.</p>';
+    return;
+  }
+  caixa.innerHTML = svgColunas(serie.map(mes => [mes.label, mapa.get(mes.chave) || 0]), false);
 }
 
 function chaveMes(data) {
@@ -468,7 +622,7 @@ function renderGraficoMetas(fim) {
     const meta = Number(item.valor);
     const pontos = serie.map(mes => {
       if (!mesCoberto(mes.chave)) return {chave: mes.chave, label: mes.label, nulo: true};
-      const realizado = soma(titulosEmbutidos.filter(titulo => String(titulo.filial || '') === codigo && String(titulo.vencimento || '').startsWith(mes.chave)), 'valor');
+      const realizado = soma(titulosEmbutidos.filter(titulo => codigoOrigem(titulo.filial) === codigoOrigem(codigo) && String(titulo.vencimento || '').startsWith(mes.chave)), 'valor');
       return {chave: mes.chave, label: mes.label, nulo: false, pct: (realizado / meta) * 100, realizado: realizado};
     });
     const atual = pontos.find(ponto => ponto.chave === hoje && !ponto.nulo) || null;
@@ -562,7 +716,13 @@ function render() {
   renderAlertas(inicio, fim);
   const titulos = titulosEmbutidos;
   const entradas = linhasDoPeriodo('receber', inicio, fim);
-  const saidasPeriodo = titulos.filter(item => dentro(item.vencimento, inicio, fim));
+  const soPendentes = document.getElementById('soPendentes');
+  if (soPendentes && !soPendentes.dataset.pronto) {
+    soPendentes.dataset.pronto = '1';
+    soPendentes.onchange = render;
+  }
+  const pendentes = !!(soPendentes && soPendentes.checked);
+  const saidasPeriodo = titulos.filter(item => dentro(item.vencimento, inicio, fim) && (!pendentes || !item.pagamento));
   const select = document.getElementById('filtroFornecedor');
   const selecionadoAntes = select.value;
   const nomes = [...new Set(saidasPeriodo.map(item => item.fornecedor || ''))].sort((a, b) => a.localeCompare(b, 'pt'));
@@ -586,7 +746,10 @@ function render() {
   document.getElementById('abertas').textContent = moeda.format(totais.aberto);
   renderGrafico(fim);
   renderGraficoMetas(fim);
-  renderGraficoOrigem(saidasTitulos, selecionado ? selecionado : 'Total do período');
+  renderGraficoOrigem(saidasTitulos, (pendentes ? 'Somente em aberto' : (selecionado ? selecionado : 'Total do período')));
+  notaOrigem(saidasPeriodo);
+  renderFornecedores(saidasTitulos);
+  renderPendentesMes(saidasPeriodo, inicio, fim);
 
   document.getElementById('entradas').innerHTML = agrupar(entradas).map(item =>
     '<tr><td>' + br(item.data) + '</td><td>' + esc(item.descricao) + '</td><td class="num rec">' + moeda.format(item.baixado) + '</td><td class="num">' + moeda.format(item.aberto) + '</td><td class="num">' + moeda.format(item.baixado + item.aberto) + '</td></tr>'
@@ -597,26 +760,27 @@ function render() {
   const caixaTotal = document.getElementById('totalSaidas');
   titulo.innerHTML = 'Saídas <em>' + (selecionado ? esc(selecionado) : 'Uma subseção por origem') + '</em>';
   caixaTotal.innerHTML = textoTotais('Total', totais);
-  const origens = [...new Set(saidasTitulos.map(item => item.filial || ''))].sort((a, b) => ordemOrigem(a) - ordemOrigem(b));
+  const origens = [...new Set(saidasTitulos.map(item => codigoOrigem(item.filial)))].sort((a, b) => ordemOrigem(a) - ordemOrigem(b));
   sessoes.innerHTML = origens.map(codigo => {
-    const linhas = saidasTitulos.filter(item => (item.filial || '') === codigo);
+    const linhas = saidasTitulos.filter(item => codigoOrigem(item.filial) === codigo);
     const parcial = totaisDe(linhas);
-    return '<section class="sessao"><h3>' + esc(nomeOrigem(codigo)) + '<em>Total ' + moeda.format(parcial.valor) + ' · Em aberto ' + moeda.format(parcial.aberto) + '</em></h3>'
+    return '<details class="sessao"><summary><span>' + esc(nomeOrigem(codigo)) + '</span><em>Total ' + moeda.format(parcial.valor) + ' · Em aberto ' + moeda.format(parcial.aberto) + '</em></summary>'
       + '<div class="tabela"><table><thead><tr><th>Descrição</th><th>Documento</th><th>Emissão</th><th>Vencimento</th><th class="num">Valor</th><th class="num">Pago</th><th class="num">Juros</th><th>Pagamento</th><th>Observação</th></tr></thead><tbody>'
       + linhas.map(item =>
         '<tr class="' + (item.atipico ? 'atipico' : '') + '"><td>' + esc(item.fornecedor) + '</td><td>' + esc(item.documento) + '</td><td>' + br(item.emissao) + '</td><td>' + br(item.vencimento) + '</td><td class="num">' + moedaOuVazio(item.valor) + '</td><td class="num">' + (item.atipico ? 'ilegível' : moedaOuVazio(item.pago)) + '</td><td class="num">' + (item.atipico ? '' : moedaOuVazio(item.juros)) + '</td><td>' + (item.pagamento ? br(item.pagamento) : 'Em aberto') + '</td><td>' + esc(item.obs) + '</td></tr>'
       ).join('')
-      + '</tbody><tfoot><tr><td colspan="4">Subtotal · ' + parcial.quantidade + (parcial.quantidade === 1 ? ' título' : ' títulos') + '</td><td class="num">' + moeda.format(parcial.valor) + '</td><td class="num">' + moeda.format(parcial.pago) + '</td><td></td><td class="num">' + moeda.format(parcial.aberto) + '</td><td></td></tr></tfoot></table></div></section>';
+      + '</tbody><tfoot><tr><td colspan="4">Subtotal · ' + parcial.quantidade + (parcial.quantidade === 1 ? ' título' : ' títulos') + '</td><td class="num">' + moeda.format(parcial.valor) + '</td><td class="num">' + moeda.format(parcial.pago) + '</td><td></td><td class="num">' + moeda.format(parcial.aberto) + '</td><td></td></tr></tfoot></table></div></details>';
   }).join('') || '<p>Nenhuma saída nesse período.</p>';
 
   document.getElementById('contas').innerHTML = (DADOS.contas || []).map(conta =>
     '<tr><td>' + esc(conta.nome) + '</td><td class="num">' + moeda.format(conta.saldo) + '</td></tr>'
   ).join('');
 
-  document.getElementById('meta').textContent = (DADOS.filial || '') + ' · atualizado em ' + String(DADOS.geradoEm || '').replace('T', ' ');
+  document.getElementById('meta').textContent = (DADOS.filial || '') + ' · atualizado em ' + textoQuando(DADOS.geradoEm || '');
   const contasFora = (DADOS.contas || []).filter(conta => Math.abs(conta.saldo) >= 1000000).map(conta => conta.nome);
-  let nota = 'O SGF separa cada dia em duas partes: o que já foi baixado e o que continua em aberto. A tabela junta as duas na mesma linha.';
-  nota += ' Nas saídas, cada origem fica em uma subseção, com o próprio subtotal. O filtro de descrição mostra só aquele fornecedor e recalcula os totais. Atualizar pede um sincronismo em segundo plano; a tela continua no último sincronismo até ele terminar.';
+  let nota = 'As entradas vêm da classificação financeira do SGF: cada movimento com tipo receita entra na soma do dia, sem divisão por loja.';
+  nota += ' As saídas vêm do contas a pagar. Cada filial e a matriz ficam fechadas até serem abertas. Só pendentes esconde o que já foi pago e mantém os meses em aberto.';
+  nota += ' Atualizar pede um sincronismo em segundo plano; a tela continua no último sincronismo até ele terminar.';
   if (coberturaInicio && coberturaFim && (inicio < coberturaInicio || fim > coberturaFim)) {
     nota += ' O último sincronismo cobre ' + br(coberturaInicio) + ' a ' + br(coberturaFim) + '.';
   }
@@ -628,6 +792,21 @@ function isoLocal(data) {
   const mes = String(data.getMonth() + 1).padStart(2, '0');
   const dia = String(data.getDate()).padStart(2, '0');
   return data.getFullYear() + '-' + mes + '-' + dia;
+}
+function textoQuando(iso) {
+  if (!iso) return '';
+  const data = new Date(String(iso).replace(' ', 'T'));
+  if (!Number.isFinite(data.getTime())) return String(iso).replace('T', ' ');
+  const texto = new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Fortaleza',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  }).format(data);
+  return texto + ' (−03:00, Fortaleza)';
 }
 function textoIdade(iso) {
   if (!iso) return 'sem sincronização';
@@ -849,7 +1028,7 @@ def deve_sincronizar(agora, ultimo_fim, intervalo, pausado, pedido_id, ultimo_pe
 def iso_local(epoch):
     if not epoch:
         return ""
-    return datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="seconds")
+    return datetime.fromtimestamp(epoch, FORTALEZA).isoformat(timespec="seconds")
 
 
 _estado_assinatura = None
@@ -868,7 +1047,7 @@ def atualizar_estado(campos):
 
 
 def executar_com_estado(sessao, base, inicio, fim, intervalo, pausado):
-    agora_iso = datetime.now().astimezone().isoformat(timespec="seconds")
+    agora_iso = agora_fortaleza()
     atualizar_estado(
         {
             "emAndamento": True,
@@ -879,7 +1058,7 @@ def executar_com_estado(sessao, base, inicio, fim, intervalo, pausado):
     )
     ok = executar_ciclo(sessao, base, inicio, fim)
     terminou = time.time()
-    terminou_iso = datetime.now().astimezone().isoformat(timespec="seconds")
+    terminou_iso = agora_fortaleza()
     campos = {
         "emAndamento": False,
         "pausado": pausado,
@@ -1052,7 +1231,7 @@ def ciclo(base, user, password, sessao, inicio="", fim=""):
     payload["titulos"] = sessao.consultar(inicio, fim)
     payload["titulosInicio"] = inicio
     payload["titulosFim"] = fim
-    payload["geradoEm"] = datetime.now().astimezone().isoformat(timespec="seconds")
+    payload["geradoEm"] = agora_fortaleza()
     gravar(payload, sessao.filial)
 
 

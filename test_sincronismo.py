@@ -224,6 +224,19 @@ class Sincronismo(unittest.TestCase):
         self.assertFalse(Path(str(PAINEL_CAMINHO) + ".tmp").exists())
         self.assertTrue(sync_sgf.painel_valido())
 
+    def test_fuso_de_fortaleza_e_nome_da_matriz(self):
+        self.assertTrue(sync_sgf.agora_fortaleza().endswith("-03:00"))
+        self.assertEqual(aplicacao.nome_origem("1"), "Matriz")
+        self.assertEqual(aplicacao.nome_origem("01"), "Matriz")
+        self.assertEqual(aplicacao.nome_origem("2"), "Filial 2")
+        self.assertEqual(aplicacao.nome_origem("100"), "ADM | Central")
+        self.assertIn("19:16", aplicacao.texto_fortaleza("2026-11-07T22:16:07+00:00"))
+        self.assertIn("Fortaleza", aplicacao.texto_fortaleza("2026-11-07T22:16:07+00:00"))
+        self.assertIn("America/Fortaleza", sync_sgf.HTML)
+        self.assertIn('id="soPendentes"', sync_sgf.HTML)
+        self.assertIn("<details class=\"sessao\">", sync_sgf.HTML)
+        self.assertIn("Fornecedores por loja", sync_sgf.HTML)
+
     def test_regras_da_agenda(self):
         agora = 1_000_000
         self.assertEqual(sync_sgf.deve_sincronizar(agora, agora - 10, 30, False, "", ""), "")

@@ -4,7 +4,7 @@ import os
 import re
 import secrets
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from flask import Flask, jsonify, redirect, render_template, request, session
@@ -287,7 +287,9 @@ def idade_sync(iso):
         quando = datetime.fromisoformat(texto)
     except ValueError:
         return "sem sincronização"
-    agora = datetime.now(quando.tzinfo) if quando.tzinfo else datetime.now()
+    if quando.tzinfo is None:
+        quando = quando.replace(tzinfo=FORTALEZA)
+    agora = datetime.now(FORTALEZA)
     minutos = max(0, int((agora - quando).total_seconds())) // 60
     if minutos < 1:
         return "há menos de 1 min"
@@ -414,12 +416,38 @@ def categorias_painel():
 CODIGO_ORIGEM = re.compile(r"^[0-9A-Za-z]{0,12}$")
 
 
+FORTALEZA = timezone(timedelta(hours=-3))
+
+
+def codigo_origem(codigo):
+    texto = str(codigo or "").strip()
+    if texto.isdigit():
+        return str(int(texto))
+    return texto
+
+
 def nome_origem(codigo):
-    if codigo == "100":
+    normal = codigo_origem(codigo)
+    if normal == "100":
         return "ADM | Central"
-    if not codigo:
+    if normal == "1":
+        return "Matriz"
+    if not normal:
         return "Sem filial"
-    return f"Filial {codigo}"
+    return f"Filial {normal}"
+
+
+def texto_fortaleza(iso):
+    texto = str(iso or "").strip()
+    if not texto:
+        return ""
+    try:
+        quando = datetime.fromisoformat(texto)
+    except ValueError:
+        return texto.replace("T", " ")
+    if quando.tzinfo is None:
+        quando = quando.replace(tzinfo=FORTALEZA)
+    return quando.astimezone(FORTALEZA).strftime("%d/%m/%Y %H:%M") + " (−03:00, Fortaleza)"
 
 
 def ordem_origem(codigo):
@@ -927,11 +955,11 @@ def sincronismo_form():
         intervalo=resumo["intervaloMinutos"],
         pausado=resumo["pausado"],
         idade=resumo["idade"],
-        gerado_em=resumo["geradoEm"].replace("T", " "),
+        gerado_em=texto_fortaleza(resumo["geradoEm"]),
         em_andamento=resumo["emAndamento"],
         ultimo_ok=resumo["ultimoOk"],
-        ultimo_erro=resumo["ultimoErroEm"].replace("T", " "),
-        proximo=resumo["proximoEm"].replace("T", " "),
+        ultimo_erro=texto_fortaleza(resumo["ultimoErroEm"]),
+        proximo=texto_fortaleza(resumo["proximoEm"]),
         csrf=garantir_csrf(),
     )
 
@@ -954,11 +982,11 @@ def sincronismo_post():
             intervalo=request.form.get("intervalo", ""),
             pausado=pausado,
             idade=resumo["idade"],
-            gerado_em=resumo["geradoEm"].replace("T", " "),
+            gerado_em=texto_fortaleza(resumo["geradoEm"]),
             em_andamento=resumo["emAndamento"],
             ultimo_ok=resumo["ultimoOk"],
-            ultimo_erro=resumo["ultimoErroEm"].replace("T", " "),
-            proximo=resumo["proximoEm"].replace("T", " "),
+            ultimo_erro=texto_fortaleza(resumo["ultimoErroEm"]),
+            proximo=texto_fortaleza(resumo["proximoEm"]),
             csrf=garantir_csrf(),
         )
     configuracao_set("sync_intervalo_minutos", intervalo)
