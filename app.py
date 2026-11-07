@@ -4,7 +4,6 @@ import os
 import re
 import secrets
 import sqlite3
-import time
 from datetime import datetime
 from pathlib import Path
 
@@ -16,8 +15,9 @@ PAINEL = Path(os.environ.get("GEFIN_PAINEL", Path(__file__).with_name("painel_sg
 DB = Path(os.environ.get("GEFIN_DB", Path(__file__).with_name("usuarios.db")))
 CONTROLE = Path(os.environ.get("GEFIN_CONTROLE", Path(__file__).with_name("controle")))
 AGUARDAR_SYNC = os.environ.get("GEFIN_AGUARDAR_SYNC") == "1"
-SYNC_TIMEOUT = int(os.environ.get("GEFIN_SYNC_TIMEOUT", "150"))
 LOGIN_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,39}$")
+INTERVALO_MIN = 5
+INTERVALO_MAX = 24 * 60
 
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
@@ -88,6 +88,8 @@ def preparar():
                     "INSERT INTO usuarios (login, nome, senha_hash, admin, ativo) VALUES (?, ?, ?, 1, 1)",
                     (login, "Administrador", generate_password_hash(senha)),
                 )
+    agenda = agenda_salva()
+    publicar_agenda(agenda["intervalo"], agenda["pausado"])
 
 
 def conectar():
@@ -176,22 +178,90 @@ def salvar_credenciais_sgf(usuario, senha):
     return ""
 
 
+def intervalo_ambiente():
+    try:
+        valor = int(os.environ.get("SGF_A_CADA", "30"))
+    except ValueError:
+        valor = 30
+    if INTERVALO_MIN <= valor <= INTERVALO_MAX:
+        return valor
+    return 30
+
+
+def configuracao_get(chave):
+    with conectar() as conn:
+        row = conn.execute("SELECT valor FROM configuracao WHERE chave = ?", (chave,)).fetchone()
+    if row is None:
+        return None
+    return row["valor"]
+
+
+def configuracao_set(chave, valor):
+    with conectar() as conn:
+        conn.execute(
+            """
+            INSERT INTO configuracao (chave, valor) VALUES (?, ?)
+            ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor
+            """,
+            (chave, str(valor)),
+        )
+
+
+def agenda_salva():
+    bruto = configuracao_get("sync_intervalo_minutos")
+    pausa = configuracao_get("sync_pausado")
+    if bruto is None:
+        return {"intervalo": intervalo_ambiente(), "pausado": False}
+    try:
+        intervalo = int(bruto)
+    except ValueError:
+        intervalo = intervalo_ambiente()
+    if intervalo < INTERVALO_MIN or intervalo > INTERVALO_MAX:
+        intervalo = intervalo_ambiente()
+    return {"intervalo": intervalo, "pausado": str(pausa) == "1"}
+
+
+def publicar_agenda(intervalo, pausado):
+    gravar_json(
+        CONTROLE / "agenda.json",
+        {"intervaloMinutos": int(intervalo), "pausado": bool(pausado)},
+    )
+
+
 def pedir_sincronizacao(inicio="", fim=""):
-    if not AGUARDAR_SYNC:
-        return {"ok": True}
-    antes = PAINEL.stat().st_mtime_ns if PAINEL.exists() else 0
     pedido_id = secrets.token_hex(8)
-    gravar_json(CONTROLE / "pedido.json", {"id": pedido_id, "inicio": inicio, "fim": fim})
-    limite = time.time() + SYNC_TIMEOUT
-    feito_caminho = CONTROLE / "feito.json"
-    while time.time() < limite:
-        feito = ler_json(feito_caminho)
-        if feito.get("id") == pedido_id:
-            return feito
-        if PAINEL.exists() and PAINEL.stat().st_mtime_ns > antes and feito.get("ok"):
-            return feito
-        time.sleep(0.4)
-    return {"ok": False}
+    gravar_json(
+        CONTROLE / "pedido.json",
+        {
+            "id": pedido_id,
+            "inicio": inicio,
+            "fim": fim,
+            "quando": datetime.now().astimezone().isoformat(timespec="seconds"),
+        },
+    )
+    return {"ok": True, "id": pedido_id}
+
+
+def resumo_sincronismo():
+    estado = ler_json(CONTROLE / "estado.json")
+    pedido = ler_json(CONTROLE / "pedido.json")
+    feito = ler_json(CONTROLE / "feito.json")
+    agenda = agenda_salva()
+    gerado = str(dados_painel().get("geradoEm") or "")
+    return {
+        "ok": True,
+        "geradoEm": gerado,
+        "idade": idade_sync(gerado),
+        "emAndamento": bool(estado.get("emAndamento")),
+        "ultimoOk": estado.get("ultimoOk") if "ultimoOk" in estado else None,
+        "ultimoErroEm": str(estado.get("ultimoErroEm") or ""),
+        "proximoEm": str(estado.get("proximoEm") or ""),
+        "pausado": agenda["pausado"],
+        "intervaloMinutos": agenda["intervalo"],
+        "pedidoId": str(pedido.get("id") or ""),
+        "feitoId": str(feito.get("id") or ""),
+        "feitoOk": feito.get("ok") if "ok" in feito else None,
+    }
 
 
 def dados_painel():
@@ -243,18 +313,28 @@ def periodo_formulario(inicio, fim):
     return inicio, fim
 
 
-def bloco_atualizar(csrf, gerado_em):
+def bloco_atualizar(_csrf, gerado_em):
     return (
         '<div style="position:sticky;top:46px;z-index:19;display:flex;gap:10px;align-items:center;'
         'flex-wrap:wrap;padding:8px 16px;background:#f8fafc;border-bottom:1px solid #d7e0ec;'
         'font:14px/1.3 system-ui,Segoe UI,sans-serif">'
         '<button id="atualizar" type="button" style="border:1px solid #1d4ed8;background:#1d4ed8;color:#fff;'
         'border-radius:8px;padding:6px 12px;cursor:pointer;font-weight:700">Atualizar</button>'
-        f'<span id="idadeSync" data-quando="{html.escape(gerado_em, quote=True)}">{html.escape(idade_sync(gerado_em))}</span>'
+        f'<span id="idadeSync">{html.escape(idade_sync(gerado_em))}</span>'
         '<span id="avisoSync"></span></div>'
+    )
+
+
+def script_sincronismo(csrf, gerado_em):
+    return (
         "<script>(function(){"
-        f"var quando={json.dumps(gerado_em)};"
-        "function textoIdade(iso){if(!iso)return 'sem sincronização';"
+        f"var gerado={json.dumps(gerado_em)};"
+        f"var csrf={json.dumps(csrf)};"
+        "var aviso=document.getElementById('avisoSync');"
+        "var botao=document.getElementById('atualizar');"
+        "var espera=null;"
+        "function mostrar(texto){if(aviso)aviso.textContent=texto;}"
+        "function idade(iso){if(!iso)return 'sem sincronização';"
         "var ms=Date.now()-new Date(String(iso).replace(' ','T')).getTime();"
         "if(!isFinite(ms))return 'sem sincronização';"
         "var minutos=Math.floor(Math.max(0,ms)/60000);"
@@ -263,26 +343,43 @@ def bloco_atualizar(csrf, gerado_em):
         "var horas=Math.floor(minutos/60);"
         "if(horas<24)return 'há '+horas+' h';"
         "return 'há '+Math.floor(horas/24)+' d';}"
-        "var el=document.getElementById('idadeSync');"
-        "function pintar(){if(el)el.textContent=textoIdade(quando);}"
+        "function pintar(){var el=document.getElementById('idadeSync');if(el)el.textContent=idade(gerado);}"
         "pintar();setInterval(pintar,15000);"
-        "var botao=document.getElementById('atualizar');"
+        "function estado(){return fetch('/sync/status').then(function(resposta){return resposta.json();});}"
+        "function aplicar(st){if(!st||!st.ok||(botao&&botao.disabled))return;"
+        "if(st.emAndamento){mostrar('Sincronizando em segundo plano. A tela continua com o último sincronismo.');return;}"
+        "if(st.geradoEm&&gerado&&st.geradoEm!==gerado){mostrar('Há um sincronismo novo. Recarregue a página para vê-lo.');return;}"
+        "if(st.ultimoOk===false)mostrar('A última sincronização falhou. A tela continua com o último sincronismo concluído.');}"
+        "estado().then(aplicar).catch(function(){});"
+        "setInterval(function(){estado().then(aplicar).catch(function(){});},15000);"
         "if(!botao)return;"
-        "botao.addEventListener('click',function(){"
+        "botao.onclick=function(){"
+        "if(espera)clearInterval(espera);"
         "botao.disabled=true;botao.textContent='Sincronizando...';"
-        "var aviso=document.getElementById('avisoSync');if(aviso)aviso.textContent='';"
-        "var corpo=new URLSearchParams();"
-        f"corpo.set('csrf',{json.dumps(csrf)});"
+        "mostrar('Sincronizando em segundo plano. A tela continua com o último sincronismo.');"
+        "var corpo=new URLSearchParams();corpo.set('csrf',csrf);"
         "var inicio=document.getElementById('inicio');var fim=document.getElementById('fim');"
         "if(inicio&&fim){corpo.set('inicio',inicio.value);corpo.set('fim',fim.value);}"
+        "var pedido='';var comeco=Date.now();"
         "fetch('/atualizar',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:corpo.toString()})"
         ".then(function(resposta){return resposta.json();})"
-        ".then(function(dados){if(dados&&dados.ok){location.reload();return;}"
-        "botao.disabled=false;botao.textContent='Atualizar';"
-        "if(aviso)aviso.textContent='Não foi possível sincronizar. A tela continua com a última consulta concluída.';})"
+        ".then(function(dados){"
+        "if(!dados||!dados.ok){botao.disabled=false;botao.textContent='Atualizar';"
+        "mostrar('Não foi possível sincronizar. A tela continua com o último sincronismo.');return;}"
+        "pedido=dados.id||'';"
+        "espera=setInterval(function(){"
+        "estado().then(function(st){"
+        "if(!st)return;"
+        "if(st.geradoEm&&st.geradoEm!==gerado&&!st.emAndamento){clearInterval(espera);location.reload();return;}"
+        "if(pedido&&st.feitoId===pedido&&st.feitoOk===false&&!st.emAndamento){"
+        "clearInterval(espera);botao.disabled=false;botao.textContent='Atualizar';"
+        "mostrar('Não foi possível sincronizar. A tela continua com o último sincronismo.');return;}"
+        "if(Date.now()-comeco>180000){clearInterval(espera);botao.disabled=false;botao.textContent='Atualizar';"
+        "mostrar('A sincronização continua em segundo plano. A tela segue com o último sincronismo.');}"
+        "}).catch(function(){});},2000);})"
         ".catch(function(){botao.disabled=false;botao.textContent='Atualizar';"
-        "if(aviso)aviso.textContent='Não foi possível sincronizar. A tela continua com a última consulta concluída.';});"
-        "});})();</script>"
+        "mostrar('Não foi possível sincronizar. A tela continua com o último sincronismo.');});"
+        "};})();</script>"
     )
 
 
@@ -538,7 +635,14 @@ def painel():
         'gap:12px;align-items:center;padding:10px 16px;background:#102033;color:#fff;'
         'font:14px/1.3 system-ui,Segoe UI,sans-serif">'
         f"<span>{html.escape(usuario['nome'])}</span><span style=\"display:flex;gap:14px;align-items:center\">"
-        + ('<a style="color:#fff" href="/usuarios">Usuários</a><a style="color:#fff" href="/metas">Metas</a><a style="color:#fff" href="/consulta">Acesso SGF</a>' if usuario["admin"] else "")
+        + (
+            '<a style="color:#fff" href="/usuarios">Usuários</a>'
+            '<a style="color:#fff" href="/metas">Metas</a>'
+            '<a style="color:#fff" href="/sincronismo">Sincronismo</a>'
+            '<a style="color:#fff" href="/consulta">Acesso SGF</a>'
+            if usuario["admin"]
+            else ""
+        )
         + '<a style="color:#fff" href="/senha">Senha</a>'
         + '<form method="post" action="/sair" style="margin:0">'
         + f'<input type="hidden" name="csrf" value="{html.escape(csrf)}">'
@@ -554,6 +658,11 @@ def painel():
         conteudo = conteudo.replace("<body>", "<body>" + barra, 1)
     else:
         conteudo = barra + conteudo
+    script = script_sincronismo(csrf, str(dados_painel().get("geradoEm") or ""))
+    if "</body>" in conteudo:
+        conteudo = conteudo.replace("</body>", script + "</body>", 1)
+    else:
+        conteudo += script
     return conteudo
 
 
@@ -570,7 +679,14 @@ def atualizar():
     if not AGUARDAR_SYNC:
         return jsonify({"ok": False})
     resultado = pedir_sincronizacao(periodo[0], periodo[1])
-    return jsonify({"ok": bool(resultado.get("ok"))})
+    return jsonify({"ok": True, "id": resultado["id"]})
+
+
+@app.get("/sync/status")
+def sync_status():
+    if not usuario_atual():
+        return jsonify({"ok": False}), 401
+    return jsonify(resumo_sincronismo())
 
 
 @app.get("/saidas")
@@ -784,6 +900,72 @@ def consulta_post():
         )
     session["aviso"] = "Acesso da consulta atualizado. A próxima abertura do relatório usa esse login."
     return redirect("/consulta")
+
+
+def ler_intervalo_form(texto):
+    texto = str(texto or "").strip()
+    if not texto.isdigit():
+        return None, "Informe o intervalo em minutos."
+    valor = int(texto)
+    if valor < INTERVALO_MIN or valor > INTERVALO_MAX:
+        return None, f"O intervalo fica entre {INTERVALO_MIN} e {INTERVALO_MAX} minutos."
+    return valor, ""
+
+
+@app.get("/sincronismo")
+def sincronismo_form():
+    usuario, resposta = exigir_login()
+    if resposta:
+        return resposta
+    if not usuario["admin"]:
+        return redirect("/")
+    resumo = resumo_sincronismo()
+    return render_template(
+        "sincronismo.html",
+        erro="",
+        aviso=session.pop("aviso", ""),
+        intervalo=resumo["intervaloMinutos"],
+        pausado=resumo["pausado"],
+        idade=resumo["idade"],
+        gerado_em=resumo["geradoEm"].replace("T", " "),
+        em_andamento=resumo["emAndamento"],
+        ultimo_ok=resumo["ultimoOk"],
+        ultimo_erro=resumo["ultimoErroEm"].replace("T", " "),
+        proximo=resumo["proximoEm"].replace("T", " "),
+        csrf=garantir_csrf(),
+    )
+
+
+@app.post("/sincronismo")
+def sincronismo_post():
+    usuario, resposta = exigir_login()
+    if resposta:
+        return resposta
+    if not usuario["admin"] or not csrf_ok():
+        return redirect("/")
+    intervalo, erro = ler_intervalo_form(request.form.get("intervalo", ""))
+    pausado = request.form.get("pausado") == "on"
+    resumo = resumo_sincronismo()
+    if erro:
+        return render_template(
+            "sincronismo.html",
+            erro=erro,
+            aviso="",
+            intervalo=request.form.get("intervalo", ""),
+            pausado=pausado,
+            idade=resumo["idade"],
+            gerado_em=resumo["geradoEm"].replace("T", " "),
+            em_andamento=resumo["emAndamento"],
+            ultimo_ok=resumo["ultimoOk"],
+            ultimo_erro=resumo["ultimoErroEm"].replace("T", " "),
+            proximo=resumo["proximoEm"].replace("T", " "),
+            csrf=garantir_csrf(),
+        )
+    configuracao_set("sync_intervalo_minutos", intervalo)
+    configuracao_set("sync_pausado", "1" if pausado else "0")
+    publicar_agenda(intervalo, pausado)
+    session["aviso"] = "Agendamento salvo. O coletor usa o novo intervalo na próxima volta."
+    return redirect("/sincronismo")
 
 
 @app.get("/metas")

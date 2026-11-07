@@ -307,7 +307,6 @@ HTML = """<!DOCTYPE html>
 const DADOS = __DADOS__;
 const METAS = __METAS__;
 const METAS_ORIGEM = __METAS_ORIGEM__;
-const CSRF = "__CSRF__";
 const moeda = new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'});
 const titulosEmbutidos = DADOS.titulos || [];
 const coberturaInicio = DADOS.titulosInicio || '';
@@ -617,7 +616,7 @@ function render() {
   document.getElementById('meta').textContent = (DADOS.filial || '') + ' · atualizado em ' + String(DADOS.geradoEm || '').replace('T', ' ');
   const contasFora = (DADOS.contas || []).filter(conta => Math.abs(conta.saldo) >= 1000000).map(conta => conta.nome);
   let nota = 'O SGF separa cada dia em duas partes: o que já foi baixado e o que continua em aberto. A tabela junta as duas na mesma linha.';
-  nota += ' Nas saídas, cada origem fica em uma subseção, com o próprio subtotal. O filtro de descrição mostra só aquele fornecedor e recalcula os totais. Atualizar consulta o SGF; até lá, a tela usa o último sincronismo.';
+  nota += ' Nas saídas, cada origem fica em uma subseção, com o próprio subtotal. O filtro de descrição mostra só aquele fornecedor e recalcula os totais. Atualizar pede um sincronismo em segundo plano; a tela continua no último sincronismo até ele terminar.';
   if (coberturaInicio && coberturaFim && (inicio < coberturaInicio || fim > coberturaFim)) {
     nota += ' O último sincronismo cobre ' + br(coberturaInicio) + ' a ' + br(coberturaFim) + '.';
   }
@@ -661,30 +660,6 @@ if (coberturaInicio && coberturaFim) {
 document.getElementById('buscar').onclick = render;
 inicioEl.onchange = render;
 fimEl.onchange = render;
-document.getElementById('atualizar').onclick = () => {
-  const botao = document.getElementById('atualizar');
-  const aviso = document.getElementById('avisoSync');
-  botao.disabled = true;
-  botao.textContent = 'Sincronizando...';
-  if (aviso) aviso.textContent = '';
-  const corpo = new URLSearchParams();
-  corpo.set('csrf', CSRF);
-  corpo.set('inicio', inicioEl.value);
-  corpo.set('fim', fimEl.value);
-  fetch('/atualizar', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: corpo.toString()})
-    .then(resposta => resposta.json())
-    .then(dados => {
-      if (dados && dados.ok) { location.reload(); return; }
-      botao.disabled = false;
-      botao.textContent = 'Atualizar';
-      if (aviso) aviso.textContent = 'Não foi possível sincronizar. A tela continua com a última consulta concluída.';
-    })
-    .catch(() => {
-      botao.disabled = false;
-      botao.textContent = 'Atualizar';
-      if (aviso) aviso.textContent = 'Não foi possível sincronizar. A tela continua com a última consulta concluída.';
-    });
-};
 render();
 </script>
 </body>
@@ -774,7 +749,9 @@ def gravar(payload, filial):
     html = HTML.replace("__DADOS__", json.dumps(payload, ensure_ascii=False)).replace("__LOGO__", logo_data())
     arquivo = destino()
     arquivo.parent.mkdir(parents=True, exist_ok=True)
-    arquivo.write_text(html, encoding="utf-8")
+    temporario = arquivo.with_name(arquivo.name + ".tmp")
+    temporario.write_text(html, encoding="utf-8")
+    os.replace(temporario, arquivo)
     print(f"painel {arquivo} linhas={len(payload['linhas'])} contas={len(payload['contas'])}")
 
 
@@ -809,15 +786,150 @@ def credenciais():
     return usuario, senha
 
 
-def ler_pedido():
-    arquivo = controle_dir() / "pedido.json"
-    if not arquivo.exists():
+def ler_json(caminho):
+    if not caminho.exists():
         return {}
     try:
-        dados = json.loads(arquivo.read_text(encoding="utf-8"))
+        dados = json.loads(caminho.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
     return dados if isinstance(dados, dict) else {}
+
+
+def ler_pedido():
+    return ler_json(controle_dir() / "pedido.json")
+
+
+def painel_valido(caminho=None):
+    arquivo = caminho or destino()
+    if not arquivo.exists():
+        return False
+    try:
+        if arquivo.stat().st_size < 200:
+            return False
+        with arquivo.open(encoding="utf-8", errors="ignore") as arquivo_lido:
+            trecho = arquivo_lido.read(512_000)
+    except OSError:
+        return False
+    return "const DADOS = " in trecho
+
+
+def limitar_intervalo(valor, padrao):
+    fallback = padrao if isinstance(padrao, int) and 5 <= padrao <= 1440 else 30
+    try:
+        numero = int(valor)
+    except (TypeError, ValueError):
+        return fallback
+    if numero < 5 or numero > 1440:
+        return fallback
+    return numero
+
+
+def ler_agenda(padrao):
+    dados = ler_json(controle_dir() / "agenda.json")
+    if "intervaloMinutos" in dados:
+        intervalo = limitar_intervalo(dados.get("intervaloMinutos"), padrao if padrao > 0 else 30)
+    elif padrao > 0:
+        intervalo = limitar_intervalo(padrao, padrao)
+    else:
+        intervalo = 0
+    return intervalo, dados.get("pausado") is True
+
+
+def deve_sincronizar(agora, ultimo_fim, intervalo, pausado, pedido_id, ultimo_pedido_id):
+    if pedido_id and pedido_id != ultimo_pedido_id:
+        return "pedido"
+    if pausado or intervalo <= 0:
+        return ""
+    if not ultimo_fim or agora >= float(ultimo_fim) + intervalo * 60:
+        return "relogio"
+    return ""
+
+
+def iso_local(epoch):
+    if not epoch:
+        return ""
+    return datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="seconds")
+
+
+_estado_assinatura = None
+
+
+def atualizar_estado(campos):
+    global _estado_assinatura
+    caminho = controle_dir() / "estado.json"
+    atual = ler_json(caminho)
+    atual.update(campos)
+    assinatura = json.dumps(atual, sort_keys=True, ensure_ascii=False)
+    if caminho.exists() and assinatura == _estado_assinatura:
+        return
+    _estado_assinatura = assinatura
+    gravar_json(caminho, atual)
+
+
+def executar_com_estado(sessao, base, inicio, fim, intervalo, pausado):
+    agora_iso = datetime.now().astimezone().isoformat(timespec="seconds")
+    atualizar_estado(
+        {
+            "emAndamento": True,
+            "pausado": pausado,
+            "intervaloMinutos": intervalo,
+            "iniciadoEm": agora_iso,
+        }
+    )
+    ok = executar_ciclo(sessao, base, inicio, fim)
+    terminou = time.time()
+    terminou_iso = datetime.now().astimezone().isoformat(timespec="seconds")
+    campos = {
+        "emAndamento": False,
+        "pausado": pausado,
+        "intervaloMinutos": intervalo,
+        "terminadoEm": terminou_iso,
+        "ultimoOk": ok,
+    }
+    if ok:
+        campos["ultimoSucessoEm"] = terminou_iso
+        campos["ultimoErroEm"] = ""
+        campos["ultimoErro"] = ""
+    else:
+        campos["ultimoErroEm"] = terminou_iso
+        campos["ultimoErro"] = "falha"
+    if not pausado and intervalo > 0:
+        campos["proximoEm"] = iso_local(terminou + intervalo * 60)
+    else:
+        campos["proximoEm"] = ""
+    atualizar_estado(campos)
+    return ok, terminou
+
+
+def passo_agenda(sessao, base, padrao, ultimo_id, ultimo_fim):
+    intervalo, pausado = ler_agenda(padrao)
+    pedido = ler_pedido()
+    pedido_id = str(pedido.get("id") or "")
+    motivo = deve_sincronizar(time.time(), ultimo_fim, intervalo, pausado, pedido_id, ultimo_id)
+    if not motivo:
+        proximo = ""
+        if ultimo_fim and not pausado and intervalo > 0:
+            proximo = iso_local(float(ultimo_fim) + intervalo * 60)
+        atualizar_estado(
+            {
+                "emAndamento": False,
+                "pausado": pausado,
+                "intervaloMinutos": intervalo,
+                "proximoEm": proximo,
+            }
+        )
+        return ultimo_id, ultimo_fim, ""
+    inicio = fim = ""
+    if motivo == "pedido":
+        inicio = str(pedido.get("inicio") or "")
+        fim = str(pedido.get("fim") or "")
+    ok, terminou = executar_com_estado(sessao, base, inicio, fim, intervalo, pausado)
+    if motivo == "pedido":
+        gravar_json(controle_dir() / "feito.json", {"id": pedido_id, "ok": ok})
+        ultimo_id = pedido_id
+    print("sincronismo", motivo, "ok" if ok else "falha")
+    return ultimo_id, terminou, motivo
 
 
 class Sessao:
@@ -986,6 +1098,44 @@ def executar_ciclo(sessao, base, inicio="", fim=""):
         return False
 
 
+def servir_sob_demanda(sessao, base):
+    feito = ler_json(controle_dir() / "feito.json")
+    ultimo_id = str(feito.get("id") or "")
+    while True:
+        pedido = ler_pedido()
+        pedido_id = str(pedido.get("id") or "")
+        if pedido_id and pedido_id != ultimo_id:
+            ok, _terminou = executar_com_estado(
+                sessao,
+                base,
+                str(pedido.get("inicio") or ""),
+                str(pedido.get("fim") or ""),
+                0,
+                True,
+            )
+            gravar_json(controle_dir() / "feito.json", {"id": pedido_id, "ok": ok})
+            ultimo_id = pedido_id
+            print("sincronismo pedido", "ok" if ok else "falha")
+        else:
+            atualizar_estado(
+                {"emAndamento": False, "pausado": True, "intervaloMinutos": 0, "proximoEm": ""}
+            )
+        time.sleep(0.4)
+
+
+def servir_agenda(sessao, base, padrao):
+    feito = ler_json(controle_dir() / "feito.json")
+    ultimo_id = str(feito.get("id") or "")
+    ultimo_relatorio = ""
+    ultimo_fim = destino().stat().st_mtime if painel_valido() else 0.0
+    if ultimo_fim:
+        print("painel existente; proxima consulta segue a agenda")
+    while True:
+        ultimo_relatorio = atender_relatorio(sessao, ultimo_relatorio)
+        ultimo_id, ultimo_fim, _motivo = passo_agenda(sessao, base, padrao, ultimo_id, ultimo_fim)
+        time.sleep(0.4)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--a-cada", type=int, default=0, help="Minutos entre consultas. 0 roda uma vez.")
@@ -994,39 +1144,14 @@ def main():
     base = os.environ.get("SGF_BASE", BASE_DEFAULT).rstrip("/")
     sessao = Sessao(base)
     if args.sob_demanda:
-        ultimo_id = str(ler_pedido().get("id") or "")
-        while True:
-            pedido = ler_pedido()
-            pedido_id = str(pedido.get("id") or "")
-            if pedido_id and pedido_id != ultimo_id:
-                ok = executar_ciclo(sessao, base, str(pedido.get("inicio") or ""), str(pedido.get("fim") or ""))
-                gravar_json(controle_dir() / "feito.json", {"id": pedido_id, "ok": ok})
-                ultimo_id = pedido_id
-            time.sleep(0.4)
-    ultimo_id = ""
-    ultimo_relatorio = ""
-    proximo = 0.0
-    while True:
-        ultimo_relatorio = atender_relatorio(sessao, ultimo_relatorio)
-        pedido = ler_pedido()
-        pedido_id = str(pedido.get("id") or "")
-        agora = time.time()
-        por_pedido = bool(pedido_id) and pedido_id != ultimo_id
-        por_relogio = args.a_cada > 0 and agora >= proximo
-        if not (por_pedido or por_relogio or proximo == 0):
-            if args.a_cada <= 0:
-                break
-            time.sleep(0.4)
-            continue
-        ok = executar_ciclo(sessao, base, str(pedido.get("inicio") or ""), str(pedido.get("fim") or ""))
-        if not ok and args.a_cada <= 0 and not por_pedido:
+        servir_sob_demanda(sessao, base)
+        return
+    if args.a_cada <= 0:
+        ok, _terminou = executar_com_estado(sessao, base, "", "", 0, False)
+        if not ok:
             raise RuntimeError("falha na consulta")
-        if pedido_id:
-            gravar_json(controle_dir() / "feito.json", {"id": pedido_id, "ok": ok})
-            ultimo_id = pedido_id
-        proximo = time.time() + (args.a_cada * 60 if args.a_cada > 0 else 10**12)
-        if args.a_cada <= 0 and not por_pedido:
-            break
+        return
+    servir_agenda(sessao, base, args.a_cada)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block titulo %}Sincronismo · Painel SGF{% endblock %}
+{% block corpo %}
+<header>
+  <a href="/">Relatório</a>
+  <span>
+    <a href="/usuarios">Usuários</a>
+    <a href="/metas">Metas</a>
+    <a href="/consulta">Acesso SGF</a>
+    <a href="/senha">Senha</a>
+    <form method="post" action="/sair" style="margin:0">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="claro" type="submit" style="margin:0">Sair</button>
+    </form>
+  </span>
+</header>
+<main>
+  <h1>Sincronismo</h1>
+  <p>O relatório abre com o último sincronismo. A consulta ao SGF roda em segundo plano, no intervalo definido aqui.</p>
+  {% if erro %}<div class="erro">{{ erro }}</div>{% endif %}
+  {% if aviso %}<div class="aviso">{{ aviso }}</div>{% endif %}
+  <div class="card">
+    <p>Último sincronismo: {{ idade }}{% if gerado_em %} · {{ gerado_em }}{% endif %}</p>
+    {% if em_andamento %}<p>Há uma sincronização em andamento. O relatório continua no resultado anterior.</p>{% endif %}
+    {% if pausado %}
+    <p>O agendamento automático está pausado. O botão Atualizar do relatório continua disponível.</p>
+    {% elif proximo %}
+    <p>Próxima consulta prevista: {{ proximo }}</p>
+    {% endif %}
+    {% if ultimo_ok is sameas false %}
+    <p>A última tentativa falhou{% if ultimo_erro %} em {{ ultimo_erro }}{% endif %}. O relatório segue com o último sincronismo concluído.</p>
+    {% endif %}
+  </div>
+  <form class="card" method="post" style="margin-top:16px">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label for="intervalo">Intervalo (minutos)</label>
+    <input id="intervalo" name="intervalo" required inputmode="numeric" maxlength="4" value="{{ intervalo }}">
+    <p>Entre 5 e 1440 minutos. Valores comuns: 15, 30, 60 ou 120.</p>
+    <label class="check"><input type="checkbox" name="pausado" {{ "checked" if pausado else "" }}> Pausar o agendamento automático</label>
+    <button type="submit">Salvar</button>
+  </form>
+</main>
+{% endblock %}
