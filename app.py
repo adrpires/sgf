@@ -279,6 +279,20 @@ def dados_painel():
     return dados if isinstance(dados, dict) else {}
 
 
+def logo_painel():
+    caminho = Path(__file__).resolve().parent / "marca.png"
+    if not caminho.exists():
+        return ""
+    import base64
+
+    return "data:image/png;base64," + base64.b64encode(caminho.read_bytes()).decode("ascii")
+
+
+def montar_painel(dados):
+    template = (Path(__file__).resolve().parent / "templates" / "painel.html").read_text(encoding="utf-8")
+    return template.replace("__DADOS__", json.dumps(dados, ensure_ascii=False)).replace("__LOGO__", logo_painel())
+
+
 def idade_sync(iso):
     texto = str(iso or "").strip()
     if not texto:
@@ -651,7 +665,10 @@ def painel():
     usuario, resposta = exigir_login()
     if resposta:
         return resposta
-    if not PAINEL.exists():
+    dados = dados_painel()
+    if dados:
+        conteudo = montar_painel(dados)
+    elif not PAINEL.exists():
         conteudo = "<!DOCTYPE html><html lang='pt-BR'><body><p>O relatório ainda está sendo gerado. Use Atualizar para consultar o SGF.</p></body></html>"
     else:
         conteudo = PAINEL.read_text(encoding="utf-8")

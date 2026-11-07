@@ -234,9 +234,22 @@ class Sincronismo(unittest.TestCase):
         self.assertIn("19:16", aplicacao.texto_fortaleza("2026-11-07T22:16:07+00:00"))
         self.assertIn("Fortaleza", aplicacao.texto_fortaleza("2026-11-07T22:16:07+00:00"))
         self.assertIn("America/Fortaleza", sync_sgf.HTML)
-        self.assertIn('id="soPendentes"', sync_sgf.HTML)
-        self.assertIn("<details class=\"sessao\">", sync_sgf.HTML)
         self.assertIn("Fornecedores por loja", sync_sgf.HTML)
+
+    def test_tela_nova_aparece_com_o_html_antigo(self):
+        cliente, resposta = self.entrar()
+        html = resposta.get_data(as_text=True)
+        self.assertIn("Fornecedores por loja", html)
+        self.assertIn('id="graficosLoja"', html)
+        self.assertIn('id="graficoPendentes"', html)
+        self.assertIn('id="soPendentes"', html)
+        self.assertIn("<details class=\"sessao\">", html)
+        self.assertIn("2026-11-07T10:00:00-03:00", html)
+        self.assertNotIn("__DADOS__", html)
+        self.assertNotIn("Fornecedores por loja", PAINEL_CAMINHO.read_text(encoding="utf-8"))
+        antes = PAINEL_CAMINHO.stat().st_mtime_ns
+        cliente.get("/")
+        self.assertEqual(PAINEL_CAMINHO.stat().st_mtime_ns, antes)
 
     def test_contas_a_pagar_cobre_a_mesma_janela_das_entradas(self):
         inicio, fim = sync_sgf.janela_financeira(date(2026, 11, 7))
