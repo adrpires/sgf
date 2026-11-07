@@ -360,8 +360,6 @@ def script_sincronismo(csrf, gerado_em):
         "botao.disabled=true;botao.textContent='Sincronizando...';"
         "mostrar('Sincronizando em segundo plano. A tela continua com o último sincronismo.');"
         "var corpo=new URLSearchParams();corpo.set('csrf',csrf);"
-        "var inicio=document.getElementById('inicio');var fim=document.getElementById('fim');"
-        "if(inicio&&fim){corpo.set('inicio',inicio.value);corpo.set('fim',fim.value);}"
         "var pedido='';var comeco=Date.now();"
         "fetch('/atualizar',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:corpo.toString()})"
         ".then(function(resposta){return resposta.json();})"
@@ -701,12 +699,9 @@ def atualizar():
         return resposta
     if not csrf_ok():
         return jsonify({"ok": False}), 403
-    periodo = periodo_formulario(request.form.get("inicio", ""), request.form.get("fim", ""))
-    if not periodo:
-        return jsonify({"ok": False}), 400
     if not AGUARDAR_SYNC:
         return jsonify({"ok": False})
-    resultado = pedir_sincronizacao(periodo[0], periodo[1])
+    resultado = pedir_sincronizacao()
     return jsonify({"ok": True, "id": resultado["id"]})
 
 

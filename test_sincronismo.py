@@ -6,6 +6,7 @@ import tempfile
 import time
 import types
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 
 RAIZ = Path(tempfile.mkdtemp(prefix="sgf-sync-"))
@@ -125,8 +126,8 @@ class Sincronismo(unittest.TestCase):
         self.assertTrue(corpo["id"])
         gravado = json.loads((CONTROLE / "pedido.json").read_text(encoding="utf-8"))
         self.assertEqual(gravado["id"], corpo["id"])
-        self.assertEqual(gravado["inicio"], "2026-11-01")
-        self.assertEqual(gravado["fim"], "2026-11-07")
+        self.assertEqual(gravado["inicio"], "")
+        self.assertEqual(gravado["fim"], "")
         self.assertEqual(PAINEL_CAMINHO.stat().st_mtime_ns, antes)
 
     def test_admin_grava_agenda_e_consulta_nao_altera(self):
@@ -236,6 +237,25 @@ class Sincronismo(unittest.TestCase):
         self.assertIn('id="soPendentes"', sync_sgf.HTML)
         self.assertIn("<details class=\"sessao\">", sync_sgf.HTML)
         self.assertIn("Fornecedores por loja", sync_sgf.HTML)
+
+    def test_contas_a_pagar_cobre_a_mesma_janela_das_entradas(self):
+        inicio, fim = sync_sgf.janela_financeira(date(2026, 11, 7))
+        self.assertEqual(inicio, date(2026, 5, 1))
+        self.assertEqual(fim, date(2026, 11, 7) + timedelta(days=200))
+        self.assertLessEqual((fim - inicio).days, 400)
+        self.assertLessEqual(inicio, date(2026, 10, 1))
+        self.assertGreaterEqual(fim, date(2026, 10, 31))
+        longo_inicio, longo_fim = sync_sgf.janela_financeira(date(2027, 1, 31))
+        self.assertLessEqual((longo_fim - longo_inicio).days, 400)
+        original = sync_sgf.janela_financeira
+        sync_sgf.janela_financeira = lambda hoje=None: (date(2026, 5, 1), date(2027, 5, 26))
+        try:
+            self.assertEqual(sync_sgf.periodo_consulta("", ""), ("2026-05-01", "2027-05-26"))
+            self.assertEqual(sync_sgf.periodo_consulta("2026-10-01", "2026-10-31"), ("2026-10-01", "2026-10-31"))
+        finally:
+            sync_sgf.janela_financeira = original
+        self.assertIn("fimDoGrafico", sync_sgf.HTML)
+        self.assertIn("cerca de seis meses atrás", sync_sgf.HTML)
 
     def test_regras_da_agenda(self):
         agora = 1_000_000

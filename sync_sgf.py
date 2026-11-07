@@ -3,7 +3,7 @@ import json
 import os
 import re
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -16,6 +16,19 @@ FORTALEZA = timezone(timedelta(hours=-3))
 
 def agora_fortaleza():
     return datetime.now(FORTALEZA).isoformat(timespec="seconds")
+
+
+def hoje_fortaleza():
+    return datetime.now(FORTALEZA).date()
+
+
+def janela_financeira(hoje=None):
+    hoje = hoje or hoje_fortaleza()
+    inicio = (hoje.replace(day=1) - timedelta(days=180)).replace(day=1)
+    fim = hoje + timedelta(days=200)
+    if (fim - inicio).days > 400:
+        fim = inicio + timedelta(days=400)
+    return inicio, fim
 
 
 def destino():
@@ -88,14 +101,14 @@ def pull(session, base, path, params):
 def coletar(base, token):
     session = requests.Session()
     session.headers["Authorization"] = "Bearer " + token
-    hoje = date.today()
-    inicio = (hoje.replace(day=1) - timedelta(days=180)).replace(day=1)
-    fim = hoje + timedelta(days=200)
+    inicio_data, fim_data = janela_financeira()
+    inicio = inicio_data.isoformat()
+    fim = fim_data.isoformat()
     classes = pull(
         session,
         base,
         "/rest/integracao/financeiro/obter-classificacao-financeira-v1",
-        {"dataInicial": "2020-01-01", "dataFinal": fim.isoformat()},
+        {"dataInicial": "2020-01-01", "dataFinal": fim},
     )
     por_centro = {}
     for item in classes:
@@ -104,7 +117,7 @@ def coletar(base, token):
         session,
         base,
         "/rest/integracao/financeiro/obter-resultado-financeiro-v1",
-        {"dataInicial": inicio.isoformat(), "dataFinal": fim.isoformat()},
+        {"dataInicial": inicio, "dataFinal": fim},
     )
     contas = pull(
         session,
@@ -139,8 +152,8 @@ def coletar(base, token):
     linhas.sort(key=lambda item: (item["data"] or "", item["tipo"], item["descricao"]))
     return {
         "geradoEm": agora_fortaleza(),
-        "inicio": inicio.isoformat(),
-        "fim": fim.isoformat(),
+        "inicio": inicio,
+        "fim": fim,
         "contas": [
             {
                 "nome": item.get("nome") or "Conta",
@@ -744,8 +757,8 @@ function render() {
   saldoEl.textContent = moeda.format(saldo);
   saldoEl.className = saldo >= 0 ? 'rec' : 'pay';
   document.getElementById('abertas').textContent = moeda.format(totais.aberto);
-  renderGrafico(fim);
-  renderGraficoMetas(fim);
+  renderGrafico(fimDoGrafico(fim));
+  renderGraficoMetas(fimDoGrafico(fim));
   renderGraficoOrigem(saidasTitulos, (pendentes ? 'Somente em aberto' : (selecionado ? selecionado : 'Total do período')));
   notaOrigem(saidasPeriodo);
   renderFornecedores(saidasTitulos);
@@ -779,7 +792,7 @@ function render() {
   document.getElementById('meta').textContent = (DADOS.filial || '') + ' · atualizado em ' + textoQuando(DADOS.geradoEm || '');
   const contasFora = (DADOS.contas || []).filter(conta => Math.abs(conta.saldo) >= 1000000).map(conta => conta.nome);
   let nota = 'As entradas vêm da classificação financeira do SGF: cada movimento com tipo receita entra na soma do dia, sem divisão por loja.';
-  nota += ' As saídas vêm do contas a pagar. Cada filial e a matriz ficam fechadas até serem abertas. Só pendentes esconde o que já foi pago e mantém os meses em aberto.';
+  nota += ' As saídas vêm do contas a pagar, na mesma janela das entradas: do primeiro dia do mês, cerca de seis meses atrás, até os vencimentos dos próximos meses. Cada filial e a matriz ficam fechadas até serem abertas. Só pendentes esconde o que já foi pago e mantém os meses em aberto.';
   nota += ' Atualizar pede um sincronismo em segundo plano; a tela continua no último sincronismo até ele terminar.';
   if (coberturaInicio && coberturaFim && (inicio < coberturaInicio || fim > coberturaFim)) {
     nota += ' O último sincronismo cobre ' + br(coberturaInicio) + ' a ' + br(coberturaFim) + '.';
@@ -788,6 +801,11 @@ function render() {
   document.getElementById('nota').textContent = nota;
 }
 
+function fimDoGrafico(fim) {
+  const hoje = isoLocal(new Date());
+  if (fim && fim < hoje) return fim;
+  return hoje;
+}
 function isoLocal(data) {
   const mes = String(data.getMonth() + 1).padStart(2, '0');
   const dia = String(data.getDate()).padStart(2, '0');
@@ -1210,8 +1228,8 @@ class Sessao:
 
 
 def periodo_consulta(inicio, fim):
-    hoje = date.today()
-    padrao = hoje.replace(day=1).isoformat(), hoje.isoformat()
+    padrao_inicio, padrao_fim = janela_financeira()
+    padrao = padrao_inicio.isoformat(), padrao_fim.isoformat()
     if not inicio or not fim:
         return padrao
     try:
