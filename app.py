@@ -79,6 +79,19 @@ def preparar():
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS lancamentos (
+                id INTEGER PRIMARY KEY,
+                tipo TEXT NOT NULL,
+                data TEXT NOT NULL,
+                origem TEXT NOT NULL,
+                descricao TEXT NOT NULL,
+                valor REAL NOT NULL,
+                criado_em TEXT NOT NULL
+            )
+            """
+        )
         total = conn.execute("SELECT COUNT(*) FROM usuarios").fetchone()[0]
         if total == 0:
             login = os.environ.get("GEFIN_ADMIN_USER", "").strip().lower()
@@ -138,6 +151,65 @@ def garantir_csrf():
     if not session.get("csrf"):
         session["csrf"] = secrets.token_urlsafe(32)
     return session["csrf"]
+
+
+def tema_atual():
+    valor = configuracao_get("tema")
+    return valor if valor in {"claro", "escuro"} else "claro"
+
+
+def montar_menu(usuario, ativo=""):
+    if not usuario:
+        return ""
+    csrf = html.escape(garantir_csrf())
+    nome = html.escape(str(usuario["nome"]))
+
+    def link(href, rotulo):
+        ligado = ativo == href or (href != "/" and ativo.startswith(href))
+        classe = ' class="ativo"' if ligado else ""
+        return f'<a href="{href}"{classe}>{html.escape(rotulo)}</a>'
+
+    links = [
+        link("/", "Relatório"),
+        link("/lancamentos", "Relatório de entradas e despesas manual"),
+    ]
+    if usuario["admin"]:
+        links.extend(
+            [
+                link("/metas", "Meta de Despesas"),
+                link("/usuarios", "Usuários"),
+                link("/sincronismo", "Sincronismo"),
+                link("/consulta", "Acesso SGF"),
+            ]
+        )
+    links.extend(
+        [
+            link("/configuracoes", "Configurações"),
+            link("/senha", "Senha"),
+        ]
+    )
+    return (
+        '<div class="menu-fundo" hidden></div>'
+        '<aside class="menu" id="menuLateral">'
+        '<p class="menu-marca">SGF</p>'
+        f"<nav>{''.join(links)}</nav>"
+        '<div class="menu-usuario">'
+        f"<strong>{nome}</strong>"
+        '<form method="post" action="/sair">'
+        f'<input type="hidden" name="csrf" value="{csrf}">'
+        '<button type="submit">Sair</button>'
+        "</form></div></aside>"
+    )
+
+
+@app.context_processor
+def injetar_shell():
+    usuario = usuario_atual()
+    return {
+        "usuario_logado": usuario,
+        "tema": tema_atual(),
+        "menu_html": montar_menu(usuario, request.path) if usuario else "",
+    }
 
 
 def csrf_ok():
@@ -590,6 +662,95 @@ def moeda_br(valor):
     return "R$ " + texto.replace(",", "X").replace(".", ",").replace("X", ".")
 
 
+def listar_lancamentos():
+    with conectar() as conn:
+        return conn.execute("SELECT * FROM lancamentos ORDER BY data DESC, id DESC").fetchall()
+
+
+def origens_disponiveis():
+    codigos = {"1", "100"}
+    codigos |= {codigo_origem(item) for item in codigos_no_painel()}
+    with conectar() as conn:
+        for row in conn.execute("SELECT origem FROM lancamentos").fetchall():
+            codigos.add(codigo_origem(row["origem"]))
+    codigos.discard("")
+    return [
+        {"codigo": codigo, "nome": nome_origem(codigo)}
+        for codigo in sorted(codigos, key=ordem_origem)
+        if CODIGO_ORIGEM.fullmatch(codigo)
+    ]
+
+
+def incorporar_lancamentos(dados):
+    base = dict(dados or {})
+    linhas = list(base.get("linhas") or [])
+    titulos = list(base.get("titulos") or [])
+    for item in listar_lancamentos():
+        origem = codigo_origem(item["origem"])
+        nome = nome_origem(origem)
+        descricao = f"{nome} · {item['descricao']}"
+        valor = round(float(item["valor"]), 2)
+        manual = {
+            "data": item["data"],
+            "centro": "manual",
+            "descricao": descricao,
+            "tipo": "receber" if item["tipo"] == "entrada" else "pagar",
+            "status": "baixado",
+            "valor": valor,
+            "atipico": False,
+            "manual": True,
+            "origem": origem,
+        }
+        linhas.append(manual)
+        if item["tipo"] == "despesa":
+            titulos.append(
+                {
+                    "fornecedor": item["descricao"],
+                    "documento": f"Manual {item['id']}",
+                    "filial": origem,
+                    "emissao": item["data"],
+                    "vencimento": item["data"],
+                    "pagamento": item["data"],
+                    "valor": valor,
+                    "pago": valor,
+                    "juros": 0,
+                    "obs": "Lançamento manual",
+                    "atipico": False,
+                    "manual": True,
+                }
+            )
+    base["linhas"] = linhas
+    base["titulos"] = titulos
+    return base
+
+
+def serie_lancamentos(lancamentos):
+    nomes = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"]
+    mapa = {}
+    for item in lancamentos:
+        chave = str(item["data"])[:7]
+        grupo = mapa.setdefault(chave, {"entrada": 0.0, "despesa": 0.0})
+        if item["tipo"] in grupo:
+            grupo[item["tipo"]] += float(item["valor"])
+    maior = 1.0
+    for grupo in mapa.values():
+        maior = max(maior, grupo["entrada"], grupo["despesa"])
+    serie = []
+    for chave in sorted(mapa):
+        ano, mes = chave.split("-")
+        grupo = mapa[chave]
+        serie.append(
+            {
+                "rotulo": f"{nomes[int(mes) - 1]}/{ano[2:]}",
+                "entrada": round(grupo["entrada"], 2),
+                "despesa": round(grupo["despesa"], 2),
+                "altura_entrada": round(grupo["entrada"] / maior * 100, 1),
+                "altura_despesa": round(grupo["despesa"] / maior * 100, 1),
+            }
+        )
+    return serie
+
+
 def exigir_login():
     usuario = usuario_atual()
     if not usuario:
@@ -665,14 +826,16 @@ def painel():
     usuario, resposta = exigir_login()
     if resposta:
         return resposta
-    dados = dados_painel()
-    if dados:
+    bruto = dados_painel()
+    dados = incorporar_lancamentos(bruto)
+    if bruto or dados.get("linhas") or dados.get("titulos"):
         conteudo = montar_painel(dados)
     elif not PAINEL.exists():
         conteudo = "<!DOCTYPE html><html lang='pt-BR'><body><p>O relatório ainda está sendo gerado. Use Atualizar para consultar o SGF.</p></body></html>"
     else:
         conteudo = PAINEL.read_text(encoding="utf-8")
     csrf = garantir_csrf()
+    tem_menu = "__MENU__" in conteudo
     barra = (
         '<div style="position:sticky;top:0;z-index:20;display:flex;justify-content:space-between;'
         'gap:12px;align-items:center;padding:10px 16px;background:#102033;color:#fff;'
@@ -697,10 +860,13 @@ def painel():
     conteudo = conteudo.replace("__METAS_ORIGEM__", json.dumps(payload_metas_origem(), ensure_ascii=False), 1)
     conteudo = conteudo.replace("__METAS__", json.dumps(listar_metas(), ensure_ascii=False), 1)
     conteudo = conteudo.replace('"__CSRF__"', json.dumps(csrf), 1)
-    if "<body>" in conteudo:
-        conteudo = conteudo.replace("<body>", "<body>" + barra, 1)
-    else:
-        conteudo = barra + conteudo
+    conteudo = conteudo.replace("__TEMA__", html.escape(tema_atual()), 1)
+    conteudo = conteudo.replace("__MENU__", montar_menu(usuario, request.path), 1)
+    if not tem_menu:
+        if "<body>" in conteudo:
+            conteudo = conteudo.replace("<body>", "<body>" + barra, 1)
+        else:
+            conteudo = barra + conteudo
     script = script_sincronismo(csrf, str(dados_painel().get("geradoEm") or ""))
     if "</body>" in conteudo:
         conteudo = conteudo.replace("</body>", script + "</body>", 1)
@@ -740,13 +906,99 @@ def saidas():
     if not periodo or not inicio or not fim:
         return jsonify({"ok": False, "titulos": []}), 400
     titulos = []
-    for item in dados_painel().get("titulos") or []:
+    for item in incorporar_lancamentos(dados_painel()).get("titulos") or []:
         if not isinstance(item, dict):
             continue
         vencimento = str(item.get("vencimento") or "")
         if periodo[0] <= vencimento <= periodo[1]:
             titulos.append(item)
     return jsonify({"ok": True, "titulos": titulos})
+
+
+@app.route("/lancamentos", methods=["GET", "POST"])
+def lancamentos():
+    usuario, resposta = exigir_login()
+    if resposta:
+        return resposta
+    erro = ""
+    if request.method == "POST":
+        if not csrf_ok():
+            return redirect("/lancamentos")
+        tipo = request.form.get("tipo", "")
+        data = request.form.get("data", "")
+        origem = codigo_origem(request.form.get("origem", ""))
+        descricao = " ".join(request.form.get("descricao", "").split())
+        valor = valor_br(request.form.get("valor", ""))
+        codigos = {item["codigo"] for item in origens_disponiveis()}
+        if tipo not in {"entrada", "despesa"}:
+            erro = "Escolha entrada ou despesa."
+        elif not re.fullmatch(r"\d{4}-\d{2}-\d{2}", data or ""):
+            erro = "Informe a data do lançamento."
+        elif origem not in codigos:
+            erro = "Informe a loja de origem."
+        elif not descricao or len(descricao) > 120:
+            erro = "Informe a descrição, com até 120 caracteres."
+        elif valor is None:
+            erro = "Informe um valor maior que zero."
+        else:
+            with conectar() as conn:
+                conn.execute(
+                    "INSERT INTO lancamentos (tipo, data, origem, descricao, valor, criado_em) VALUES (?, ?, ?, ?, ?, ?)",
+                    (tipo, data, origem, descricao, valor, datetime.now(FORTALEZA).isoformat(timespec="seconds")),
+                )
+            session["aviso"] = "Lançamento manual salvo. Ele entra nos relatórios gerais."
+            return redirect("/lancamentos")
+    aviso = session.pop("aviso", "")
+    itens = listar_lancamentos()
+    return render_template(
+        "lancamentos.html",
+        erro=erro,
+        aviso=aviso,
+        itens=itens,
+        origens=origens_disponiveis(),
+        serie=serie_lancamentos(itens),
+        csrf=garantir_csrf(),
+        nome_origem=nome_origem,
+        moeda_br=moeda_br,
+    )
+
+
+@app.post("/lancamentos/<int:lancamento_id>/excluir")
+def lancamentos_excluir(lancamento_id):
+    _usuario, resposta = exigir_login()
+    if resposta:
+        return resposta
+    if csrf_ok():
+        with conectar() as conn:
+            conn.execute("DELETE FROM lancamentos WHERE id = ?", (lancamento_id,))
+        session["aviso"] = "Lançamento manual excluído."
+    return redirect("/lancamentos")
+
+
+@app.route("/configuracoes", methods=["GET", "POST"])
+def configuracoes():
+    usuario, resposta = exigir_login()
+    if resposta:
+        return resposta
+    erro = ""
+    if request.method == "POST":
+        if not csrf_ok():
+            return redirect("/configuracoes")
+        tema = request.form.get("tema", "")
+        if tema not in {"claro", "escuro"}:
+            erro = "Escolha o modo claro ou o modo escuro."
+        else:
+            configuracao_set("tema", tema)
+            session["aviso"] = "Aparência salva."
+            return redirect("/configuracoes")
+    return render_template(
+        "configuracoes.html",
+        erro=erro,
+        aviso=session.pop("aviso", ""),
+        tema_escolhido=tema_atual(),
+        csrf=garantir_csrf(),
+        usuario_nome=usuario["nome"],
+    )
 
 
 @app.get("/usuarios")

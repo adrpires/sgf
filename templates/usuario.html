@@ -1,12 +1,8 @@
 {% extends "base.html" %}
 {% block titulo %}{{ "Novo usuário" if novo else "Editar usuário" }} · Painel SGF{% endblock %}
+{% block titulo_pagina %}{{ "Novo usuário" if novo else "Editar usuário" }}{% endblock %}
 {% block corpo %}
-<header>
-  <a href="/usuarios">Usuários</a>
-  <span><a href="/">Relatório</a></span>
-</header>
 <main>
-  <h1>{{ "Novo usuário" if novo else "Editar usuário" }}</h1>
   {% if erro %}<div class="erro">{{ erro }}</div>{% endif %}
   {% if aviso %}<div class="aviso">{{ aviso }}</div>{% endif %}
   <form class="card" method="post">

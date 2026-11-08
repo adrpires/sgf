@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block titulo %}Configurações · SGF{% endblock %}
+{% block titulo_pagina %}Configurações{% endblock %}
+{% block corpo %}
+<main>
+  <p>A aparência vale para todo o sistema neste navegador, depois de salvar.</p>
+  {% if erro %}<div class="erro">{{ erro }}</div>{% endif %}
+  {% if aviso %}<div class="aviso">{{ aviso }}</div>{% endif %}
+  <form class="card" method="post">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Modo de exibição</label>
+    <div class="opcoes">
+      <label><input type="radio" name="tema" value="claro" {{ "checked" if tema_escolhido != "escuro" else "" }}> Claro</label>
+      <label><input type="radio" name="tema" value="escuro" {{ "checked" if tema_escolhido == "escuro" else "" }}> Escuro</label>
+    </div>
+    <button type="submit">Salvar</button>
+  </form>
+</main>
+{% endblock %}

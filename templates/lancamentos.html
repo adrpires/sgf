@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block titulo %}Lançamentos manuais · SGF{% endblock %}
+{% block titulo_pagina %}Relatório de entradas e despesas manual{% endblock %}
+{% block corpo %}
+<main>
+  <p>Cada lançamento pede a loja de origem e passa a somar nos relatórios gerais. Este gráfico mostra só o que foi lançado aqui.</p>
+  {% if erro %}<div class="erro">{{ erro }}</div>{% endif %}
+  {% if aviso %}<div class="aviso">{{ aviso }}</div>{% endif %}
+  <section class="card">
+    <h2>Lançamentos manuais</h2>
+    {% if serie %}
+    <div class="barras" role="img" aria-label="Entradas e despesas lançadas manualmente">
+      {% for mes in serie %}
+      <div class="col">
+        <div class="par">
+          <div class="barra entrada" style="height:{{ mes.altura_entrada }}%" title="Entradas {{ mes.rotulo }}: {{ moeda_br(mes.entrada) }}"></div>
+          <div class="barra despesa" style="height:{{ mes.altura_despesa }}%" title="Despesas {{ mes.rotulo }}: {{ moeda_br(mes.despesa) }}"></div>
+        </div>
+        <span>{{ mes.rotulo }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="legenda-manual"><span><i class="ponto entrada"></i>Entradas</span><span><i class="ponto despesa"></i>Despesas</span></div>
+    {% else %}
+    <p>Nenhum lançamento manual ainda.</p>
+    {% endif %}
+  </section>
+  <form class="card" method="post" style="margin-top:16px">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Tipo</label>
+    <div class="opcoes">
+      <label><input type="radio" name="tipo" value="entrada" required> Entrada</label>
+      <label><input type="radio" name="tipo" value="despesa"> Despesa</label>
+    </div>
+    <label for="data">Data</label>
+    <input id="data" name="data" type="date" required value="{{ request.form.get('data', '') }}">
+    <label for="origem">Loja de origem</label>
+    <select id="origem" name="origem" required>
+      {% for origem in origens %}
+      <option value="{{ origem.codigo }}" {{ "selected" if request.form.get('origem') == origem.codigo else "" }}>{{ origem.nome }}</option>
+      {% endfor %}
+    </select>
+    <label for="descricao">Descrição</label>
+    <input id="descricao" name="descricao" required maxlength="120" value="{{ request.form.get('descricao', '') }}">
+    <label for="valor">Valor (R$)</label>
+    <input id="valor" name="valor" required inputmode="decimal" maxlength="18" placeholder="0,00" value="{{ request.form.get('valor', '') }}">
+    <button type="submit">Lançar</button>
+  </form>
+  {% if itens %}
+  <table style="margin-top:16px">
+    <thead><tr><th>Data</th><th>Tipo</th><th>Loja</th><th>Descrição</th><th>Valor</th><th></th></tr></thead>
+    <tbody>
+    {% for item in itens %}
+      <tr>
+        <td>{{ item.data[8:10] }}/{{ item.data[5:7] }}/{{ item.data[0:4] }}</td>
+        <td>{{ "Entrada" if item.tipo == "entrada" else "Despesa" }}</td>
+        <td>{{ nome_origem(item.origem) }}</td>
+        <td>{{ item.descricao }}</td>
+        <td>{{ moeda_br(item.valor) }}</td>
+        <td>
+          <form method="post" action="/lancamentos/{{ item.id }}/excluir">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button class="claro" type="submit">Excluir</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</main>
+{% endblock %}

@@ -1,36 +1,102 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-tema="{{ tema }}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block titulo %}Painel SGF{% endblock %}</title>
 <style>
-  :root { --bg:#f3f6fb; --ink:#102033; --muted:#5c6b80; --line:#d7e0ec; --accent:#1d4ed8; }
+  :root { --bg:#f3f6fb; --card:#fff; --ink:#102033; --muted:#5c6b80; --line:#d7e0ec; --accent:#1d4ed8; --suave:#f8fafc; --menu:#102033; --menu-ink:#fff; }
+  html[data-tema="escuro"] { --bg:#0e1624; --card:#172233; --ink:#e7eef8; --muted:#9aadc4; --line:#2c3e56; --accent:#60a5fa; --suave:#121c2c; --menu:#0b1220; --menu-ink:#e7eef8; }
   * { box-sizing:border-box; }
   body { margin:0; font:15px/1.45 system-ui, Segoe UI, sans-serif; background:var(--bg); color:var(--ink); }
-  header { display:flex; justify-content:space-between; gap:12px; align-items:center; padding:10px 16px; background:#102033; color:#fff; }
-  header a { color:#fff; text-decoration:none; }
-  header span { display:flex; gap:14px; align-items:center; }
-  main { max-width:880px; margin:0 auto; padding:24px; }
+  .app { display:flex; height:100vh; overflow:hidden; }
+  .menu { width:248px; height:100vh; max-height:100vh; display:flex; flex-direction:column; background:var(--menu); color:var(--menu-ink); flex-shrink:0; }
+  .menu-marca { margin:0; padding:16px 16px 8px; font-weight:800; letter-spacing:.04em; }
+  .menu nav { flex:1; overflow:auto; display:flex; flex-direction:column; gap:4px; padding:8px; }
+  .menu a { color:var(--menu-ink); text-decoration:none; padding:8px 10px; border-radius:8px; }
+  .menu a.ativo, .menu a:hover { background:rgba(255,255,255,.12); }
+  .menu-usuario { flex-shrink:0; padding:12px; border-top:1px solid rgba(255,255,255,.16); }
+  .menu-usuario strong { display:block; margin-bottom:8px; }
+  .menu-usuario button { width:100%; margin:0; background:transparent; color:var(--menu-ink); border:1px solid rgba(255,255,255,.4); }
+  .coluna { flex:1; min-width:0; display:flex; flex-direction:column; height:100vh; }
+  .topo { flex-shrink:0; z-index:5; display:flex; gap:12px; align-items:center; padding:12px 16px; background:var(--card); color:var(--ink); border-bottom:1px solid var(--line); }
+  .topo-texto { min-width:0; }
+  .topo .sistema { margin:0; color:var(--muted); font-size:12px; font-weight:700; letter-spacing:.02em; }
+  .topo h1 { margin:0; font-size:20px; }
+  .miolo { flex:1; overflow:auto; }
+  .hamburguer { display:none; border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:8px; padding:6px 10px; cursor:pointer; }
+  .menu-fundo[hidden] { display:none; }
   h1 { font-size:22px; margin:0 0 16px; }
-  form.card, .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:16px; }
+  form.card, .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; color:var(--ink); }
   label { display:block; margin:12px 0 4px; color:var(--muted); font-size:13px; }
-  input, select { width:100%; border:1px solid var(--line); border-radius:8px; padding:8px 10px; font:inherit; background:#fff; }
+  input, select { width:100%; border:1px solid var(--line); border-radius:8px; padding:8px 10px; font:inherit; background:var(--card); color:var(--ink); }
   .check { display:flex; align-items:center; gap:8px; margin-top:12px; }
   .check input { width:auto; }
   button, .botao { border:0; background:var(--accent); color:#fff; border-radius:8px; padding:8px 14px; cursor:pointer; text-decoration:none; display:inline-block; margin-top:16px; }
-  button.claro { background:#fff; color:var(--ink); border:1px solid var(--line); }
-  .erro { background:#fde8e6; border:1px solid #f3b4ae; border-radius:8px; padding:8px 10px; margin-bottom:12px; }
-  .aviso { background:#e7f6ee; border:1px solid #9ad7b8; border-radius:8px; padding:8px 10px; margin-bottom:12px; }
-  table { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+  button.claro { background:var(--card); color:var(--ink); border:1px solid var(--line); }
+  .erro { background:#fde8e6; border:1px solid #f3b4ae; border-radius:8px; padding:8px 10px; margin-bottom:12px; color:#7f1d1d; }
+  .aviso { background:#e7f6ee; border:1px solid #9ad7b8; border-radius:8px; padding:8px 10px; margin-bottom:12px; color:#065f46; }
+  table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
   th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); }
   th { color:var(--muted); font-weight:600; }
+  .miolo main { width:100%; margin:0; padding:20px; }
   .login { max-width:420px; margin:12vh auto; padding:24px; }
   .rodape { margin:28px 0 8px; padding:0 16px 16px; text-align:center; color:var(--muted); font-size:13px; }
+  .opcoes { display:flex; gap:12px; flex-wrap:wrap; }
+  .opcoes label { display:flex; align-items:center; gap:8px; margin:0; }
+  .opcoes input { width:auto; }
+  .barras { display:flex; align-items:flex-end; gap:16px; height:240px; overflow-x:auto; padding-top:12px; }
+  .barras .col { display:flex; flex-direction:column; align-items:center; justify-content:flex-end; min-width:64px; height:100%; gap:6px; }
+  .barras .par { display:flex; align-items:flex-end; gap:4px; height:180px; }
+  .barras .barra { width:18px; border-radius:6px 6px 0 0; min-height:0; }
+  .barras .entrada { background:#059669; }
+  .barras .despesa { background:#dc2626; }
+  .legenda-manual { display:flex; gap:16px; color:var(--muted); font-size:13px; margin-top:8px; }
+  .ponto { width:10px; height:10px; display:inline-block; border-radius:3px; margin-right:4px; }
+  .ponto.entrada { background:#059669; }
+  .ponto.despesa { background:#dc2626; }
+  @media (max-width:800px) {
+    .hamburguer { display:inline-flex; }
+    .menu { position:fixed; z-index:40; transform:translateX(-105%); transition:transform .2s ease; }
+    .menu.aberto { transform:none; }
+    .menu-fundo:not([hidden]) { display:block; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:35; }
+  }
 </style>
 </head>
 <body>
+{% if usuario_logado %}
+<div class="app">
+  {{ menu_html|safe }}
+  <div class="coluna">
+    <header class="topo">
+      <button class="hamburguer" type="button" aria-label="Abrir menu">☰</button>
+      <div class="topo-texto">
+        <p class="sistema">Sistemas de Gestão Financeira</p>
+        <h1>{% block titulo_pagina %}{% endblock %}</h1>
+      </div>
+    </header>
+    <div class="miolo">
+{% endif %}
 {% block corpo %}{% endblock %}
 <footer class="rodape">Desenvolvido pela APSI Telecom</footer>
+{% if usuario_logado %}
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  var botao = document.querySelector('.hamburguer');
+  var menu = document.getElementById('menuLateral');
+  var fundo = document.querySelector('.menu-fundo');
+  if (!botao || !menu) return;
+  function fechar(){ menu.classList.remove('aberto'); if (fundo) fundo.hidden = true; }
+  botao.addEventListener('click', function(){
+    var aberto = menu.classList.toggle('aberto');
+    if (fundo) fundo.hidden = !aberto;
+  });
+  if (fundo) fundo.addEventListener('click', fechar);
+})();
+</script>
+{% endif %}
 </body>
 </html>

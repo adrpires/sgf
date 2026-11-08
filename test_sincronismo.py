@@ -272,6 +272,53 @@ class Sincronismo(unittest.TestCase):
         self.assertIn("Sistemas de Gestão Financeira", sync_sgf.HTML)
         self.assertIn("Meta de Despesas", sync_sgf.HTML)
         self.assertIn('stroke="transparent" stroke-width="14"', sync_sgf.HTML)
+
+    def test_lancamento_manual_entra_no_relatorio_geral(self):
+        cliente, resposta = self.entrar()
+        token = csrf_de(resposta.get_data(as_text=True))
+        self.assertIn("Relatório de entradas e despesas manual", resposta.get_data(as_text=True))
+        self.assertIn('class="hamburguer"', resposta.get_data(as_text=True))
+        self.assertIn("Administrador", resposta.get_data(as_text=True))
+        salvo = cliente.post(
+            "/lancamentos",
+            data={
+                "csrf": token,
+                "tipo": "entrada",
+                "data": "2026-10-15",
+                "origem": "1",
+                "descricao": "Aporte da matriz",
+                "valor": "1500,00",
+            },
+            follow_redirects=True,
+        )
+        self.assertIn("Lançamento manual salvo", salvo.get_data(as_text=True))
+        self.assertIn("Aporte da matriz", salvo.get_data(as_text=True))
+        despesa = cliente.post(
+            "/lancamentos",
+            data={
+                "csrf": token,
+                "tipo": "despesa",
+                "data": "2026-10-16",
+                "origem": "100",
+                "descricao": "Conserto",
+                "valor": "80,00",
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(despesa.status_code, 200)
+        pagina = cliente.get("/")
+        html = pagina.get_data(as_text=True)
+        self.assertIn("Matriz · Aporte da matriz", html)
+        self.assertIn("ADM | Central · Conserto", html)
+        self.assertIn('"manual": true', html)
+        tema = cliente.post(
+            "/configuracoes",
+            data={"csrf": token, "tema": "escuro"},
+            follow_redirects=True,
+        )
+        self.assertIn("Aparência salva", tema.get_data(as_text=True))
+        self.assertIn('data-tema="escuro"', tema.get_data(as_text=True))
+        self.assertIn('data-tema="escuro"', cliente.get("/").get_data(as_text=True))
         self.assertIn("Desenvolvido pela APSI Telecom", sync_sgf.HTML)
         self.assertIn("hojeFortaleza", sync_sgf.HTML)
         self.assertIn("alternarAberto", sync_sgf.HTML)

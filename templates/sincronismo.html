@@ -1,21 +1,8 @@
 {% extends "base.html" %}
 {% block titulo %}Sincronismo · Painel SGF{% endblock %}
+{% block titulo_pagina %}Sincronismo{% endblock %}
 {% block corpo %}
-<header>
-  <a href="/">Relatório</a>
-  <span>
-    <a href="/usuarios">Usuários</a>
-    <a href="/metas">Meta de Despesas</a>
-    <a href="/consulta">Acesso SGF</a>
-    <a href="/senha">Senha</a>
-    <form method="post" action="/sair" style="margin:0">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <button class="claro" type="submit" style="margin:0">Sair</button>
-    </form>
-  </span>
-</header>
 <main>
-  <h1>Sincronismo</h1>
   <p>O relatório abre com o último sincronismo. A consulta ao SGF roda em segundo plano, no intervalo definido aqui.</p>
   {% if erro %}<div class="erro">{{ erro }}</div>{% endif %}
   {% if aviso %}<div class="aviso">{{ aviso }}</div>{% endif %}
