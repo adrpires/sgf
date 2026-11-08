@@ -680,7 +680,7 @@ def painel():
         f"<span>{html.escape(usuario['nome'])}</span><span style=\"display:flex;gap:14px;align-items:center\">"
         + (
             '<a style="color:#fff" href="/usuarios">Usuários</a>'
-            '<a style="color:#fff" href="/metas">Metas</a>'
+            '<a style="color:#fff" href="/metas">Meta de Despesas</a>'
             '<a style="color:#fff" href="/sincronismo">Sincronismo</a>'
             '<a style="color:#fff" href="/consulta">Acesso SGF</a>'
             if usuario["admin"]
@@ -1085,7 +1085,7 @@ def metas_post():
                     """,
                     (codigo, valor),
                 )
-    session["aviso"] = "Metas salvas."
+    session["aviso"] = "Meta de despesas salva."
     return redirect("/metas")
 
 

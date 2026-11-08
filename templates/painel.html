@@ -132,7 +132,7 @@
     </div>
   </section>
   <section class="panel">
-    <h2>Meta mensal por origem <em id="metaLegenda">Percentual da meta</em></h2>
+    <h2>Meta de Despesas <em id="metaLegenda">Percentual da meta</em></h2>
     <div id="avisosMeta"></div>
     <div class="chart-line" id="metaChart"></div>
     <div class="chart-legend" id="metaLegend"></div>
@@ -539,7 +539,7 @@ function renderGraficoMetas(fim) {
   const plotH = altura - topoPx - basePx;
   const xDe = indice => serie.length === 1 ? esquerda + plotW / 2 : esquerda + (plotW * indice) / (serie.length - 1);
   const yDe = pct => topoPx + plotH - (pct / escala) * plotH;
-  let svg = '<svg viewBox="0 0 ' + largura + ' ' + altura + '" role="img" aria-label="Percentual da meta mensal por origem">';
+  let svg = '<svg viewBox="0 0 ' + largura + ' ' + altura + '" role="img" aria-label="Percentual da meta de despesas">';
   for (let i = 0; i <= 4; i++) {
     const valor = (escala / 4) * i;
     const y = yDe(valor);
