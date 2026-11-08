@@ -6,13 +6,14 @@
   {% if aviso %}<div class="aviso">{{ aviso }}</div>{% endif %}
   <p><a class="botao" href="/usuarios/novo">Novo usuário</a></p>
   <table>
-    <thead><tr><th>Nome</th><th>Usuário</th><th>Perfil</th><th>Situação</th><th></th></tr></thead>
+    <thead><tr><th>Nome</th><th>Usuário</th><th>Perfil</th><th>Lojas</th><th>Situação</th><th></th></tr></thead>
     <tbody>
     {% for item in usuarios %}
       <tr>
         <td>{{ item.nome }}</td>
         <td>{{ item.login }}</td>
         <td>{{ "Administrador" if item.admin else "Consulta" }}</td>
+        <td>{{ acessos[item.id] }}</td>
         <td>{{ "Ativo" if item.ativo else "Inativo" }}</td>
         <td><a href="/usuarios/{{ item.id }}">Editar</a></td>
       </tr>

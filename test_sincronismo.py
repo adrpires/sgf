@@ -326,6 +326,121 @@ class Sincronismo(unittest.TestCase):
         self.assertLess(sync_sgf.HTML.find(">Entradas <"), sync_sgf.HTML.find("Saídas por origem"))
         self.assertLess(sync_sgf.HTML.find('id="tituloSaidas"'), sync_sgf.HTML.find("Fornecedores por loja"))
 
+    def test_usuario_ve_somente_as_lojas_marcadas(self):
+        painel = {
+            "geradoEm": "2026-11-07T10:00:00-03:00",
+            "filial": "Teste",
+            "contas": [{"nome": "Conta secreta", "saldo": 10}],
+            "linhas": [
+                {"data": "2026-11-02", "descricao": "Receita geral", "tipo": "receber", "valor": 50, "atipico": False}
+            ],
+            "titulos": [
+                {
+                    "fornecedor": "Fornecedor Matriz",
+                    "documento": "1",
+                    "filial": "1",
+                    "emissao": "2026-11-02",
+                    "vencimento": "2026-11-02",
+                    "pagamento": "2026-11-02",
+                    "valor": 10,
+                    "pago": 10,
+                    "juros": 0,
+                    "obs": "",
+                    "atipico": False,
+                },
+                {
+                    "fornecedor": "Fornecedor Filial",
+                    "documento": "2",
+                    "filial": "2",
+                    "emissao": "2026-11-02",
+                    "vencimento": "2026-11-02",
+                    "pagamento": "",
+                    "valor": 20,
+                    "pago": 0,
+                    "juros": 0,
+                    "obs": "",
+                    "atipico": False,
+                },
+            ],
+        }
+        PAINEL_CAMINHO.write_text(
+            "<!DOCTYPE html><html><body><script>const DADOS = "
+            + json.dumps(painel)
+            + ";</script></body></html>",
+            encoding="utf-8",
+        )
+        admin, _ = self.entrar()
+        ficha = admin.get("/usuarios/novo")
+        html = ficha.get_data(as_text=True)
+        token = csrf_de(html)
+        self.assertIn("Filial 2", html)
+        vazio = admin.post(
+            "/usuarios/novo",
+            data={
+                "csrf": token,
+                "nome": "Loja",
+                "login": "loja",
+                "perfil": "consulta",
+                "senha": "senha1234",
+                "confirmar": "senha1234",
+            },
+        )
+        self.assertIn("Selecione ao menos uma loja", vazio.get_data(as_text=True))
+        criado = admin.post(
+            "/usuarios/novo",
+            data={
+                "csrf": token,
+                "nome": "Loja",
+                "login": "loja",
+                "perfil": "consulta",
+                "senha": "senha1234",
+                "confirmar": "senha1234",
+                "lojas": "1",
+            },
+            follow_redirects=True,
+        )
+        self.assertIn("Matriz", criado.get_data(as_text=True))
+        admin.post(
+            "/lancamentos",
+            data={
+                "csrf": token,
+                "tipo": "despesa",
+                "data": "2026-11-03",
+                "origem": "2",
+                "descricao": "Gasto da filial",
+                "valor": "15,00",
+            },
+        )
+        cliente, _ = self.entrar("loja", "senha1234")
+        pagina = cliente.get("/").get_data(as_text=True)
+        self.assertIn("Fornecedor Matriz", pagina)
+        self.assertNotIn("Fornecedor Filial", pagina)
+        self.assertNotIn("Receita geral", pagina)
+        self.assertNotIn("Conta secreta", pagina)
+        self.assertNotIn("Gasto da filial", pagina)
+        self.assertIn('"acessoLojas": ["1"]', pagina)
+        saidas = cliente.get("/saidas?inicio=2026-11-01&fim=2026-11-07")
+        nomes = [item["fornecedor"] for item in saidas.get_json()["titulos"]]
+        self.assertEqual(nomes, ["Fornecedor Matriz"])
+        bloqueado = cliente.post(
+            "/lancamentos",
+            data={
+                "csrf": csrf_de(cliente.get("/lancamentos").get_data(as_text=True)),
+                "tipo": "despesa",
+                "data": "2026-11-04",
+                "origem": "2",
+                "descricao": "Fora da loja",
+                "valor": "9,00",
+            },
+        )
+        self.assertIn("Informe a loja de origem", bloqueado.get_data(as_text=True))
+        self.assertNotIn("Fora da loja", cliente.get("/lancamentos").get_data(as_text=True))
+        completo = admin.get("/").get_data(as_text=True)
+        self.assertIn("Fornecedor Filial", completo)
+        self.assertIn("Receita geral", completo)
+        self.assertIn("Conta secreta", completo)
+        self.assertNotIn('"acessoLojas"', completo)
+
     def test_regras_da_agenda(self):
         agora = 1_000_000
         self.assertEqual(sync_sgf.deve_sincronizar(agora, agora - 10, 30, False, "", ""), "")

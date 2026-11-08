@@ -747,6 +747,9 @@ function render() {
   if (coberturaInicio && coberturaFim && (inicio < coberturaInicio || fim > coberturaFim)) {
     nota += ' O último sincronismo cobre ' + br(coberturaInicio) + ' a ' + br(coberturaFim) + '.';
   }
+  if (Array.isArray(DADOS.acessoLojas) && DADOS.acessoLojas.length) {
+    nota += ' Este acesso mostra somente ' + DADOS.acessoLojas.map(nomeOrigem).join(', ') + '. As entradas da classificação financeira ficam de fora, porque não identificam a loja.';
+  }
   if (contasFora.length) nota += ' Saldo fora de escala: ' + contasFora.join(', ') + '.';
   document.getElementById('nota').textContent = nota;
 }

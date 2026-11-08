@@ -19,6 +19,13 @@
     {% if not novo %}
     <label class="check"><input type="checkbox" name="ativo" {{ "checked" if ativo else "" }}> Ativo</label>
     {% endif %}
+    <fieldset>
+      <legend>Lojas com acesso</legend>
+      <p>Os relatórios mostram somente as lojas marcadas. Enquanto nenhuma loja estiver salva, o usuário vê todas.</p>
+      {% for loja in lojas %}
+      <label class="check"><input type="checkbox" name="lojas" value="{{ loja.codigo }}" {{ "checked" if loja.marcada else "" }}> {{ loja.nome }}</label>
+      {% endfor %}
+    </fieldset>
     <label>{{ "Senha" if novo else "Nova senha" }}</label>
     <input name="senha" type="password" autocomplete="new-password" {{ "required" if novo else "" }}>
     <label>Confirmar senha</label>

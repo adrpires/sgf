@@ -92,6 +92,15 @@ def preparar():
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS usuario_lojas (
+                usuario_id INTEGER NOT NULL,
+                origem TEXT NOT NULL,
+                PRIMARY KEY (usuario_id, origem)
+            )
+            """
+        )
         total = conn.execute("SELECT COUNT(*) FROM usuarios").fetchone()[0]
         if total == 0:
             login = os.environ.get("GEFIN_ADMIN_USER", "").strip().lower()
@@ -125,6 +134,72 @@ def usuario_por_login(login):
 def listar_usuarios():
     with conectar() as conn:
         return conn.execute("SELECT * FROM usuarios ORDER BY nome, login").fetchall()
+
+
+def lojas_do_usuario(usuario_id):
+    with conectar() as conn:
+        linhas = conn.execute(
+            "SELECT origem FROM usuario_lojas WHERE usuario_id = ?",
+            (usuario_id,),
+        ).fetchall()
+    return {codigo_origem(item["origem"]) for item in linhas if codigo_origem(item["origem"])}
+
+
+def acesso_lojas(usuario):
+    if not usuario:
+        return set()
+    marcas = lojas_do_usuario(usuario["id"])
+    return marcas or None
+
+
+def salvar_lojas(usuario_id, codigos):
+    with conectar() as conn:
+        conn.execute("DELETE FROM usuario_lojas WHERE usuario_id = ?", (usuario_id,))
+        for codigo in sorted(codigos):
+            conn.execute(
+                "INSERT INTO usuario_lojas (usuario_id, origem) VALUES (?, ?)",
+                (usuario_id, codigo),
+            )
+
+
+def texto_lojas(usuario_id):
+    codigos = lojas_do_usuario(usuario_id)
+    if not codigos:
+        return "Todas"
+    return ", ".join(nome_origem(codigo) for codigo in sorted(codigos, key=ordem_origem))
+
+
+def lojas_editor(usuario):
+    return acesso_lojas(usuario)
+
+
+def lojas_escolhidas(editor, atuais=None):
+    permitidas = lojas_editor(editor)
+    conhecidas = {item["codigo"] for item in origens_disponiveis()} | set(atuais or ())
+    escolhidas = set()
+    for codigo in request.form.getlist("lojas"):
+        normal = codigo_origem(codigo)
+        if normal not in conhecidas:
+            continue
+        if permitidas is not None and normal not in permitidas:
+            continue
+        escolhidas.add(normal)
+    return escolhidas
+
+
+def lojas_para_editar(editor, marcadas):
+    por_codigo = {item["codigo"]: dict(item) for item in origens_disponiveis()}
+    for codigo in marcadas:
+        por_codigo.setdefault(codigo, {"codigo": codigo, "nome": nome_origem(codigo)})
+    permitidas = lojas_editor(editor)
+    opcoes = []
+    for codigo in sorted(por_codigo, key=ordem_origem):
+        if permitidas is not None and codigo not in permitidas:
+            continue
+        item = por_codigo[codigo]
+        item["marcada"] = codigo in marcadas
+        opcoes.append(item)
+    return opcoes
 
 
 def ultimo_admin(exceto_id=None):
@@ -583,7 +658,28 @@ def texto_percentual(valor):
     return f"{numero:.1f}".replace(".", ",")
 
 
-def linhas_formulario(textos=None):
+def filtrar_acesso(dados, permitidas):
+    if permitidas is None:
+        return dados
+    base = dict(dados or {})
+    titulos = []
+    for item in base.get("titulos") or []:
+        if isinstance(item, dict) and codigo_origem(item.get("filial")) in permitidas:
+            titulos.append(item)
+    linhas = []
+    for item in base.get("linhas") or []:
+        if not isinstance(item, dict) or not item.get("manual"):
+            continue
+        if codigo_origem(item.get("origem")) in permitidas:
+            linhas.append(item)
+    base["titulos"] = titulos
+    base["linhas"] = linhas
+    base["contas"] = []
+    base["acessoLojas"] = sorted(permitidas, key=ordem_origem)
+    return base
+
+
+def linhas_formulario(textos=None, permitidas=None):
     salvas = metas_origem_salvas()
     presentes = codigos_no_painel()
     codigos = set(presentes) | set(salvas)
@@ -607,14 +703,19 @@ def linhas_formulario(textos=None):
                 "no_painel": codigo in presentes,
             }
         )
+    if permitidas is not None:
+        linhas = [item for item in linhas if codigo_origem(item["codigo"]) in permitidas]
     return linhas
 
 
-def payload_metas_origem():
+def payload_metas_origem(permitidas=None):
     salvas = metas_origem_salvas()
+    origens = sorted(salvas, key=ordem_origem)
+    if permitidas is not None:
+        origens = [origem for origem in origens if codigo_origem(origem) in permitidas]
     return {
         "percentual": percentual_aviso(),
-        "itens": [{"origem": origem, "valor": salvas[origem]} for origem in sorted(salvas, key=ordem_origem)],
+        "itens": [{"origem": origem, "valor": salvas[origem]} for origem in origens],
     }
 
 
@@ -827,7 +928,7 @@ def painel():
     if resposta:
         return resposta
     bruto = dados_painel()
-    dados = incorporar_lancamentos(bruto)
+    dados = filtrar_acesso(incorporar_lancamentos(bruto), acesso_lojas(usuario))
     if bruto or dados.get("linhas") or dados.get("titulos"):
         conteudo = montar_painel(dados)
     elif not PAINEL.exists():
@@ -857,7 +958,7 @@ def painel():
     )
     if 'id="atualizar"' not in conteudo:
         barra += bloco_atualizar(csrf, str(dados_painel().get("geradoEm") or ""))
-    conteudo = conteudo.replace("__METAS_ORIGEM__", json.dumps(payload_metas_origem(), ensure_ascii=False), 1)
+    conteudo = conteudo.replace("__METAS_ORIGEM__", json.dumps(payload_metas_origem(acesso_lojas(usuario)), ensure_ascii=False), 1)
     conteudo = conteudo.replace("__METAS__", json.dumps(listar_metas(), ensure_ascii=False), 1)
     conteudo = conteudo.replace('"__CSRF__"', json.dumps(csrf), 1)
     conteudo = conteudo.replace("__TEMA__", html.escape(tema_atual()), 1)
@@ -897,7 +998,7 @@ def sync_status():
 
 @app.get("/saidas")
 def saidas():
-    _usuario, resposta = exigir_login()
+    usuario, resposta = exigir_login()
     if resposta:
         return resposta
     inicio = request.args.get("inicio", "")
@@ -905,8 +1006,9 @@ def saidas():
     periodo = periodo_formulario(inicio, fim)
     if not periodo or not inicio or not fim:
         return jsonify({"ok": False, "titulos": []}), 400
+    visiveis = filtrar_acesso(incorporar_lancamentos(dados_painel()), acesso_lojas(usuario))
     titulos = []
-    for item in incorporar_lancamentos(dados_painel()).get("titulos") or []:
+    for item in visiveis.get("titulos") or []:
         if not isinstance(item, dict):
             continue
         vencimento = str(item.get("vencimento") or "")
@@ -929,7 +1031,10 @@ def lancamentos():
         origem = codigo_origem(request.form.get("origem", ""))
         descricao = " ".join(request.form.get("descricao", "").split())
         valor = valor_br(request.form.get("valor", ""))
+        permitidas = acesso_lojas(usuario)
         codigos = {item["codigo"] for item in origens_disponiveis()}
+        if permitidas is not None:
+            codigos &= permitidas
         if tipo not in {"entrada", "despesa"}:
             erro = "Escolha entrada ou despesa."
         elif not re.fullmatch(r"\d{4}-\d{2}-\d{2}", data or ""):
@@ -949,13 +1054,21 @@ def lancamentos():
             session["aviso"] = "Lançamento manual salvo. Ele entra nos relatórios gerais."
             return redirect("/lancamentos")
     aviso = session.pop("aviso", "")
-    itens = listar_lancamentos()
+    permitidas = acesso_lojas(usuario)
+    itens = [
+        item
+        for item in listar_lancamentos()
+        if permitidas is None or codigo_origem(item["origem"]) in permitidas
+    ]
+    origens = origens_disponiveis()
+    if permitidas is not None:
+        origens = [item for item in origens if item["codigo"] in permitidas]
     return render_template(
         "lancamentos.html",
         erro=erro,
         aviso=aviso,
         itens=itens,
-        origens=origens_disponiveis(),
+        origens=origens,
         serie=serie_lancamentos(itens),
         csrf=garantir_csrf(),
         nome_origem=nome_origem,
@@ -965,13 +1078,16 @@ def lancamentos():
 
 @app.post("/lancamentos/<int:lancamento_id>/excluir")
 def lancamentos_excluir(lancamento_id):
-    _usuario, resposta = exigir_login()
+    usuario, resposta = exigir_login()
     if resposta:
         return resposta
     if csrf_ok():
+        permitidas = acesso_lojas(usuario)
         with conectar() as conn:
-            conn.execute("DELETE FROM lancamentos WHERE id = ?", (lancamento_id,))
-        session["aviso"] = "Lançamento manual excluído."
+            row = conn.execute("SELECT origem FROM lancamentos WHERE id = ?", (lancamento_id,)).fetchone()
+            if row and (permitidas is None or codigo_origem(row["origem"]) in permitidas):
+                conn.execute("DELETE FROM lancamentos WHERE id = ?", (lancamento_id,))
+                session["aviso"] = "Lançamento manual excluído."
     return redirect("/lancamentos")
 
 
@@ -1009,7 +1125,14 @@ def usuarios():
     if not usuario["admin"]:
         return redirect("/")
     aviso = session.pop("aviso", "")
-    return render_template("usuarios.html", usuarios=listar_usuarios(), aviso=aviso, csrf=garantir_csrf())
+    usuarios = listar_usuarios()
+    return render_template(
+        "usuarios.html",
+        usuarios=usuarios,
+        acessos={item["id"]: texto_lojas(item["id"]) for item in usuarios},
+        aviso=aviso,
+        csrf=garantir_csrf(),
+    )
 
 
 @app.get("/usuarios/novo")
@@ -1028,6 +1151,7 @@ def usuario_novo():
         login="",
         perfil="consulta",
         ativo=True,
+        lojas=lojas_para_editar(usuario, set()),
         csrf=garantir_csrf(),
     )
 
@@ -1044,11 +1168,14 @@ def usuario_novo_post():
     perfil = request.form.get("perfil", "consulta")
     senha = request.form.get("senha", "")
     confirmar = request.form.get("confirmar", "")
+    escolhidas = lojas_escolhidas(usuario)
     erro = ""
     if not nome:
         erro = "Informe o nome."
     else:
         erro = login_valido(login) or senha_valida(senha, confirmar)
+    if not erro and not escolhidas:
+        erro = "Selecione ao menos uma loja."
     if erro:
         return render_template(
             "usuario.html",
@@ -1059,13 +1186,16 @@ def usuario_novo_post():
             login=login,
             perfil=perfil,
             ativo=True,
+            lojas=lojas_para_editar(usuario, escolhidas),
             csrf=garantir_csrf(),
         )
     with conectar() as conn:
-        conn.execute(
+        cursor = conn.execute(
             "INSERT INTO usuarios (login, nome, senha_hash, admin, ativo) VALUES (?, ?, ?, ?, 1)",
             (login, nome, generate_password_hash(senha), 1 if perfil == "admin" else 0),
         )
+        novo_id = cursor.lastrowid
+    salvar_lojas(novo_id, escolhidas)
     session["aviso"] = "Usuário cadastrado."
     return redirect("/usuarios")
 
@@ -1089,6 +1219,7 @@ def usuario_editar(usuario_id):
         login=alvo["login"],
         perfil="admin" if alvo["admin"] else "consulta",
         ativo=bool(alvo["ativo"]),
+        lojas=lojas_para_editar(usuario, lojas_do_usuario(alvo["id"])),
         csrf=garantir_csrf(),
     )
 
@@ -1109,6 +1240,8 @@ def usuario_editar_post(usuario_id):
     ativo = request.form.get("ativo") == "on"
     senha = request.form.get("senha", "")
     confirmar = request.form.get("confirmar", "")
+    atuais = lojas_do_usuario(alvo["id"])
+    escolhidas = lojas_escolhidas(usuario, atuais)
     admin = perfil == "admin"
     erro = ""
     if not nome:
@@ -1119,6 +1252,8 @@ def usuario_editar_post(usuario_id):
         erro = senha_valida(senha, confirmar)
     if not erro and alvo["admin"] and alvo["ativo"] and (not admin or not ativo) and ultimo_admin(alvo["id"]):
         erro = "É preciso manter pelo menos um administrador ativo."
+    if not erro and not escolhidas and not (atuais - lojas_editor(usuario)):
+        erro = "Selecione ao menos uma loja."
     if erro:
         return render_template(
             "usuario.html",
@@ -1129,6 +1264,7 @@ def usuario_editar_post(usuario_id):
             login=login,
             perfil=perfil,
             ativo=ativo,
+            lojas=lojas_para_editar(usuario, escolhidas or atuais),
             csrf=garantir_csrf(),
         )
     with conectar() as conn:
@@ -1141,6 +1277,9 @@ def usuario_editar_post(usuario_id):
                 "UPDATE usuarios SET senha_hash = ? WHERE id = ?",
                 (generate_password_hash(senha), alvo["id"]),
             )
+    editor = lojas_editor(usuario)
+    finais = escolhidas if editor is None else (escolhidas & editor) | (atuais - editor)
+    salvar_lojas(alvo["id"], finais)
     session["aviso"] = "Usuário atualizado."
     return redirect(f"/usuarios/{alvo['id']}")
 
@@ -1271,7 +1410,7 @@ def metas_form():
         "metas.html",
         erro="",
         aviso=session.pop("aviso", ""),
-        linhas=linhas_formulario(),
+        linhas=linhas_formulario(permitidas=acesso_lojas(usuario)),
         percentual=texto_percentual(percentual_aviso()),
         csrf=garantir_csrf(),
     )
@@ -1293,15 +1432,21 @@ def metas_post():
         erro = erro or "Não foi possível ler as metas."
     else:
         vistos = set()
-        conhecidas = codigos_no_painel() | set(metas_origem_salvas())
+        permitidas = acesso_lojas(usuario)
+        conhecidas = {codigo_origem(codigo) for codigo in codigos_no_painel()} | {
+            codigo_origem(codigo) for codigo in metas_origem_salvas()
+        }
         for codigo, texto in zip(origens, valores):
-            codigo = codigo.strip()
+            codigo = codigo_origem(codigo.strip())
             textos[codigo] = texto
             if codigo in vistos:
                 erro = erro or "Origem repetida."
                 continue
             vistos.add(codigo)
             if not CODIGO_ORIGEM.fullmatch(codigo) or codigo not in conhecidas:
+                erro = erro or "Origem desconhecida."
+                continue
+            if permitidas is not None and codigo not in permitidas:
                 erro = erro or "Origem desconhecida."
                 continue
             valor, falha = ler_meta_form(texto)
@@ -1314,7 +1459,7 @@ def metas_post():
             "metas.html",
             erro=erro,
             aviso="",
-            linhas=linhas_formulario(textos),
+            linhas=linhas_formulario(textos, acesso_lojas(usuario)),
             percentual=request.form.get("percentual", ""),
             csrf=garantir_csrf(),
         )
