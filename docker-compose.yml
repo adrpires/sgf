@@ -25,10 +25,12 @@ services:
       GEFIN_CONTROLE: /controle
       GEFIN_AGUARDAR_SYNC: "1"
       GEFIN_COOKIE_SECURE: "1"
+      GEFIN_BACKUP_DIR: /backup
     volumes:
       - painel:/data:ro
       - usuarios:/usuarios
       - controle:/controle
+      - ${GEFIN_BACKUP_HOST:-./backup}:/backup
 
   sync:
     build: .

@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import sqlite3
 import sys
 import tempfile
 import time
@@ -440,6 +441,30 @@ class Sincronismo(unittest.TestCase):
         self.assertIn("Receita geral", completo)
         self.assertIn("Conta secreta", completo)
         self.assertNotIn('"acessoLojas"', completo)
+
+    def test_backup_diario_fica_fora_e_preserva_outros_arquivos(self):
+        pasta = RAIZ / "backup-teste"
+        os.environ["GEFIN_BACKUP_DIR"] = str(pasta)
+        try:
+            destino = aplicacao.gravar_backup()
+            self.assertTrue(destino.is_file())
+            self.assertGreater(destino.stat().st_size, 0)
+            self.assertEqual(oct(destino.stat().st_mode & 0o777), "0o600")
+            with sqlite3.connect(destino) as conn:
+                total = conn.execute("SELECT COUNT(*) FROM usuarios").fetchone()[0]
+            self.assertGreaterEqual(total, 1)
+            self.assertEqual(aplicacao.gravar_backup(), destino)
+            self.assertTrue((pasta / f"sgf-painel-{destino.name[13:23]}.html").is_file())
+            antigo = pasta / "sgf-usuarios-2020-01-01.db"
+            antigo.write_text("velho", encoding="utf-8")
+            alheio = pasta / "outro-sistema.db"
+            alheio.write_text("nao-mexer", encoding="utf-8")
+            aplicacao.gravar_backup()
+            self.assertFalse(antigo.exists())
+            self.assertEqual(alheio.read_text(encoding="utf-8"), "nao-mexer")
+            self.assertTrue(destino.exists())
+        finally:
+            os.environ.pop("GEFIN_BACKUP_DIR", None)
 
     def test_regras_da_agenda(self):
         agora = 1_000_000

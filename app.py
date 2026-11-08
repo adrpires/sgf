@@ -1,9 +1,13 @@
 import html
 import json
+import logging
 import os
 import re
 import secrets
+import shutil
 import sqlite3
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -112,13 +116,23 @@ def preparar():
                 )
     agenda = agenda_salva()
     publicar_agenda(agenda["intervalo"], agenda["pausado"])
+    proteger_banco()
 
 
 def conectar():
-    conn = sqlite3.connect(DB, timeout=10)
+    conn = sqlite3.connect(DB, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=30000")
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=FULL")
     return conn
+
+
+def proteger_banco():
+    for caminho in (DB, Path(str(DB) + "-wal"), Path(str(DB) + "-shm"), DB.parent / "secret.key"):
+        if caminho.exists():
+            os.chmod(caminho, 0o600)
 
 
 def usuario_por_id(usuario_id):
@@ -1545,7 +1559,89 @@ def senha_post():
     return redirect("/senha")
 
 
+def pasta_backup():
+    texto = os.environ.get("GEFIN_BACKUP_DIR", "").strip()
+    if not texto:
+        return None
+    pasta = Path(texto)
+    pasta.mkdir(parents=True, exist_ok=True)
+    return pasta
+
+
+def limpar_backups_antigos(pasta, dias):
+    limite = datetime.now(FORTALEZA).date() - timedelta(days=dias)
+    for caminho in pasta.iterdir():
+        nome = caminho.name
+        if not (nome.startswith("sgf-usuarios-") or nome.startswith("sgf-painel-")):
+            continue
+        achado = re.search(r"(\d{4}-\d{2}-\d{2})", nome)
+        if not achado:
+            continue
+        try:
+            dia = datetime.strptime(achado.group(1), "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if dia < limite:
+            caminho.unlink()
+
+
+def gravar_backup():
+    pasta = pasta_backup()
+    if pasta is None:
+        return None
+    dia = datetime.now(FORTALEZA).date().isoformat()
+    destino = pasta / f"sgf-usuarios-{dia}.db"
+    if not (destino.exists() and destino.stat().st_size > 0):
+        temporario = pasta / f".sgf-usuarios-{dia}.db.tmp"
+        if temporario.exists():
+            temporario.unlink()
+        origem = sqlite3.connect(DB, timeout=30)
+        copia = sqlite3.connect(temporario)
+        try:
+            origem.backup(copia)
+        finally:
+            copia.close()
+            origem.close()
+        os.chmod(temporario, 0o600)
+        temporario.replace(destino)
+    painel_destino = pasta / f"sgf-painel-{dia}.html"
+    if PAINEL.exists() and not (painel_destino.exists() and painel_destino.stat().st_size > 0):
+        shutil.copyfile(PAINEL, painel_destino)
+        os.chmod(painel_destino, 0o600)
+    limpar_backups_antigos(pasta, 30)
+    return destino
+
+
+def segundos_ate_backup():
+    agora = datetime.now(FORTALEZA)
+    alvo = agora.replace(hour=3, minute=0, second=0, microsecond=0)
+    if alvo <= agora:
+        alvo += timedelta(days=1)
+    return max(60, (alvo - agora).total_seconds())
+
+
+def ciclo_backup():
+    while True:
+        try:
+            gravar_backup()
+        except Exception:
+            logging.getLogger("sgf").exception("Falha no backup diário do SGF")
+            time.sleep(15 * 60)
+            continue
+        time.sleep(segundos_ate_backup())
+
+
+def iniciar_backup():
+    if not os.environ.get("GEFIN_BACKUP_DIR", "").strip():
+        return
+    if getattr(iniciar_backup, "ativo", False):
+        return
+    iniciar_backup.ativo = True
+    threading.Thread(target=ciclo_backup, name="backup-sgf", daemon=True).start()
+
+
 preparar()
+iniciar_backup()
 
 
 if __name__ == "__main__":

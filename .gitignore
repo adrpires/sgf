@@ -7,6 +7,7 @@ apoio/titulos.json
 __pycache__/
 usuarios.db
 usuarios.db-*
+backup/
 secret.key
 certs/
 controle/
