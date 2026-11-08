@@ -11,7 +11,10 @@
   body { margin:0; font:15px/1.45 system-ui, Segoe UI, sans-serif; background:var(--bg); color:var(--ink); }
   .app { display:flex; height:100vh; overflow:hidden; }
   .menu { width:248px; height:100vh; max-height:100vh; display:flex; flex-direction:column; background:var(--menu); color:var(--menu-ink); flex-shrink:0; }
-  .menu-marca { margin:0; padding:16px 16px 8px; font-weight:800; letter-spacing:.04em; }
+  .menu-marca { display:flex; align-items:flex-end; flex-shrink:0; padding:8px 16px 0; border-bottom:1px solid var(--line); }
+  .menu-logo { height:calc(100% - 8px); width:auto; max-height:64px; aspect-ratio:1; border-radius:50%; object-fit:cover; background:#fff; display:block; }
+  .menu-sigla { font-weight:800; letter-spacing:.04em; padding-bottom:12px; }
+  .menu-corpo { flex:1; min-height:0; display:flex; flex-direction:column; }
   .menu nav { flex:1; overflow:auto; display:flex; flex-direction:column; gap:4px; padding:8px; }
   .menu a { color:var(--menu-ink); text-decoration:none; padding:8px 10px; border-radius:8px; }
   .menu a.ativo, .menu a:hover { background:rgba(255,255,255,.12); }
@@ -33,7 +36,6 @@
   html[data-tema="escuro"] select,
   html[data-tema="escuro"] button,
   html[data-tema="escuro"] th,
-  html[data-tema="escuro"] .brand-logo,
   html[data-tema="escuro"] .totalizador,
   html[data-tema="escuro"] tfoot td { background:var(--card); color:var(--ink); }
   html[data-tema="escuro"] .note { background:#3a2e16; border-color:#6b5420; color:var(--ink); }
@@ -44,11 +46,6 @@
     .menu.aberto { transform:none; }
     .menu-fundo:not([hidden]) { display:block; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:35; }
   }
-  .brand { display:flex; align-items:center; gap:14px; margin-bottom:16px; }
-  .brand-logo-wrap { position:relative; flex-shrink:0; line-height:0; }
-  .brand-logo { width:76px; height:76px; border-radius:50%; object-fit:cover; background:#fff; padding:3px; border:2px solid rgba(29,78,216,.25); box-shadow:0 4px 16px rgba(29,78,216,.28); display:block; }
-  .brand-logo-ring { position:absolute; inset:-7px; border-radius:50%; border:2px dashed rgba(29,78,216,.45); animation:spinRing 14s linear infinite; }
-  @keyframes spinRing { to { transform:rotate(360deg); } }
   h1 { font-size:22px; margin:0; }
   .sub { color:var(--muted); }
   .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:16px; }
@@ -95,7 +92,6 @@
   .origem-nota:empty { display:none; }
   button#atualizar { background:var(--accent); color:#fff; border-color:var(--accent); font-weight:700; }
   .menu-usuario button { background:transparent; color:var(--menu-ink); border:1px solid rgba(255,255,255,.4); }
-  .topo .brand-logo { width:52px; height:52px; }
   button#atualizar:disabled { opacity:.65; cursor:wait; }
   .idade-sync { color:var(--muted); font-size:13px; font-weight:600; }
   .aviso-sync { color:#b42318; font-weight:700; margin:-8px 0 12px; }
@@ -137,7 +133,6 @@ __MENU__
   <div class="coluna">
     <header class="topo">
       <button class="hamburguer" type="button" aria-label="Abrir menu">☰</button>
-      <span class="brand-logo-wrap"><img class="brand-logo" src="__LOGO__" alt="SGF"><span class="brand-logo-ring"></span></span>
       <div>
         <h1>Sistemas de Gestão Financeira</h1>
         <div class="sub" id="meta"></div>
@@ -242,6 +237,18 @@ __MENU__
     fundo.hidden = true;
   });
 })();
+function alinharMarca() {
+  var topo = document.querySelector('.topo');
+  var marca = document.querySelector('.menu-marca');
+  if (!marca) return;
+  if (!topo || window.matchMedia('(max-width:800px)').matches) {
+    marca.style.height = '';
+    return;
+  }
+  marca.style.height = topo.offsetHeight + 'px';
+}
+window.addEventListener('resize', alinharMarca);
+alinharMarca();
 </script>
 <script>
 const DADOS = __DADOS__;
@@ -740,6 +747,7 @@ function render() {
   ).join('');
 
   document.getElementById('meta').textContent = (DADOS.filial || '') + ' · atualizado em ' + textoQuando(DADOS.geradoEm || '');
+  if (typeof alinharMarca === 'function') alinharMarca();
   const contasFora = (DADOS.contas || []).filter(conta => Math.abs(conta.saldo) >= 1000000).map(conta => conta.nome);
   let nota = 'As entradas vêm da classificação financeira do SGF: cada movimento com tipo receita entra na soma do dia, sem divisão por loja.';
   nota += ' As saídas vêm do contas a pagar, do primeiro dia de cerca de seis meses atrás até a data de hoje, e incluem as despesas lançadas manualmente. As entradas manuais entram na mesma soma, com a loja no nome. Cada filial, a matriz e cada loja em Fornecedores ficam fechadas até serem abertas. Só pendentes esconde o que já foi pago e mantém os meses em aberto.';

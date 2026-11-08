@@ -277,6 +277,8 @@ class Sincronismo(unittest.TestCase):
     def test_lancamento_manual_entra_no_relatorio_geral(self):
         cliente, resposta = self.entrar()
         token = csrf_de(resposta.get_data(as_text=True))
+        self.assertIn(">Dashboard<", resposta.get_data(as_text=True))
+        self.assertIn("menu-logo", resposta.get_data(as_text=True))
         self.assertIn("Relatório de entradas e despesas manual", resposta.get_data(as_text=True))
         self.assertIn('class="hamburguer"', resposta.get_data(as_text=True))
         self.assertIn("Administrador", resposta.get_data(as_text=True))

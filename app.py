@@ -259,7 +259,7 @@ def montar_menu(usuario, ativo=""):
         return f'<a href="{href}"{classe}>{html.escape(rotulo)}</a>'
 
     links = [
-        link("/", "Relatório"),
+        link("/", "Dashboard"),
         link("/lancamentos", "Relatório de entradas e despesas manual"),
     ]
     if usuario["admin"]:
@@ -277,17 +277,24 @@ def montar_menu(usuario, ativo=""):
             link("/senha", "Senha"),
         ]
     )
+    logo = logo_painel()
+    marca = (
+        f'<img class="menu-logo" src="{html.escape(logo)}" alt="SGF">'
+        if logo
+        else '<span class="menu-sigla">SGF</span>'
+    )
     return (
         '<div class="menu-fundo" hidden></div>'
         '<aside class="menu" id="menuLateral">'
-        '<p class="menu-marca">SGF</p>'
+        f'<div class="menu-marca">{marca}</div>'
+        '<div class="menu-corpo">'
         f"<nav>{''.join(links)}</nav>"
         '<div class="menu-usuario">'
         f"<strong>{nome}</strong>"
         '<form method="post" action="/sair">'
         f'<input type="hidden" name="csrf" value="{csrf}">'
         '<button type="submit">Sair</button>'
-        "</form></div></aside>"
+        "</form></div></div></aside>"
     )
 
 

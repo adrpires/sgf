@@ -11,7 +11,10 @@
   body { margin:0; font:15px/1.45 system-ui, Segoe UI, sans-serif; background:var(--bg); color:var(--ink); }
   .app { display:flex; height:100vh; overflow:hidden; }
   .menu { width:248px; height:100vh; max-height:100vh; display:flex; flex-direction:column; background:var(--menu); color:var(--menu-ink); flex-shrink:0; }
-  .menu-marca { margin:0; padding:16px 16px 8px; font-weight:800; letter-spacing:.04em; }
+  .menu-marca { display:flex; align-items:flex-end; flex-shrink:0; padding:8px 16px 0; border-bottom:1px solid var(--line); }
+  .menu-logo { height:calc(100% - 8px); width:auto; max-height:64px; aspect-ratio:1; border-radius:50%; object-fit:cover; background:#fff; display:block; }
+  .menu-sigla { font-weight:800; letter-spacing:.04em; padding-bottom:12px; }
+  .menu-corpo { flex:1; min-height:0; display:flex; flex-direction:column; }
   .menu nav { flex:1; overflow:auto; display:flex; flex-direction:column; gap:4px; padding:8px; }
   .menu a { color:var(--menu-ink); text-decoration:none; padding:8px 10px; border-radius:8px; }
   .menu a.ativo, .menu a:hover { background:rgba(255,255,255,.12); }
@@ -96,6 +99,18 @@
   });
   if (fundo) fundo.addEventListener('click', fechar);
 })();
+function alinharMarca() {
+  var topo = document.querySelector('.topo');
+  var marca = document.querySelector('.menu-marca');
+  if (!marca) return;
+  if (!topo || window.matchMedia('(max-width:800px)').matches) {
+    marca.style.height = '';
+    return;
+  }
+  marca.style.height = topo.offsetHeight + 'px';
+}
+window.addEventListener('resize', alinharMarca);
+alinharMarca();
 </script>
 {% endif %}
 </body>
