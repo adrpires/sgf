@@ -25,10 +25,7 @@ def hoje_fortaleza():
 def janela_financeira(hoje=None):
     hoje = hoje or hoje_fortaleza()
     inicio = (hoje.replace(day=1) - timedelta(days=180)).replace(day=1)
-    fim = hoje + timedelta(days=200)
-    if (fim - inicio).days > 400:
-        fim = inicio + timedelta(days=400)
-    return inicio, fim
+    return inicio, hoje
 
 
 def destino():

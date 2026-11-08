@@ -254,11 +254,11 @@ class Sincronismo(unittest.TestCase):
     def test_contas_a_pagar_cobre_a_mesma_janela_das_entradas(self):
         inicio, fim = sync_sgf.janela_financeira(date(2026, 11, 7))
         self.assertEqual(inicio, date(2026, 5, 1))
-        self.assertEqual(fim, date(2026, 11, 7) + timedelta(days=200))
-        self.assertLessEqual((fim - inicio).days, 400)
+        self.assertEqual(fim, date(2026, 11, 7))
         self.assertLessEqual(inicio, date(2026, 10, 1))
         self.assertGreaterEqual(fim, date(2026, 10, 31))
         longo_inicio, longo_fim = sync_sgf.janela_financeira(date(2027, 1, 31))
+        self.assertEqual(longo_fim, date(2027, 1, 31))
         self.assertLessEqual((longo_fim - longo_inicio).days, 400)
         original = sync_sgf.janela_financeira
         sync_sgf.janela_financeira = lambda hoje=None: (date(2026, 5, 1), date(2027, 5, 26))
@@ -269,6 +269,12 @@ class Sincronismo(unittest.TestCase):
             sync_sgf.janela_financeira = original
         self.assertIn("fimDoGrafico", sync_sgf.HTML)
         self.assertIn("cerca de seis meses atrás", sync_sgf.HTML)
+        self.assertIn("Sistemas de Gestão Financeira", sync_sgf.HTML)
+        self.assertIn("hojeFortaleza", sync_sgf.HTML)
+        self.assertIn("alternarAberto", sync_sgf.HTML)
+        self.assertIn("serieComparativo", sync_sgf.HTML)
+        self.assertLess(sync_sgf.HTML.find(">Entradas <"), sync_sgf.HTML.find("Saídas por origem"))
+        self.assertLess(sync_sgf.HTML.find('id="tituloSaidas"'), sync_sgf.HTML.find("Fornecedores por loja"))
 
     def test_regras_da_agenda(self):
         agora = 1_000_000

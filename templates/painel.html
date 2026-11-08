@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Gestão Financeira</title>
+<title>Sistemas de Gestão Financeira</title>
 <style>
   :root { --bg:#f3f6fb; --card:#fff; --ink:#102033; --muted:#5c6b80; --line:#d7e0ec; --pay:#dc2626; --rec:#059669; --accent:#1d4ed8; --chart-grid:#e2e9f2; }
   * { box-sizing:border-box; }
@@ -11,7 +11,7 @@
   main { max-width:1100px; margin:0 auto; padding:24px; }
   .brand { display:flex; align-items:center; gap:14px; margin-bottom:16px; }
   .brand-logo-wrap { position:relative; flex-shrink:0; line-height:0; }
-  .brand-logo { width:52px; height:52px; border-radius:50%; object-fit:cover; background:#fff; padding:3px; border:2px solid rgba(29,78,216,.25); box-shadow:0 4px 16px rgba(29,78,216,.28); display:block; }
+  .brand-logo { width:76px; height:76px; border-radius:50%; object-fit:cover; background:#fff; padding:3px; border:2px solid rgba(29,78,216,.25); box-shadow:0 4px 16px rgba(29,78,216,.28); display:block; }
   .brand-logo-ring { position:absolute; inset:-7px; border-radius:50%; border:2px dashed rgba(29,78,216,.45); animation:spinRing 14s linear infinite; }
   @keyframes spinRing { to { transform:rotate(360deg); } }
   h1 { font-size:22px; margin:0; }
@@ -30,7 +30,7 @@
   .chart-y-axis { position:absolute; left:0; top:8px; bottom:28px; width:44px; display:flex; flex-direction:column; justify-content:space-between; font-size:11px; color:var(--muted); text-align:right; }
   .chart-grid-lines { position:absolute; left:48px; right:4px; top:8px; bottom:28px; display:flex; flex-direction:column; justify-content:space-between; pointer-events:none; }
   .chart-grid-lines div { border-top:1px dashed var(--chart-grid); height:0; }
-  .chart-bars { position:relative; height:100%; display:flex; align-items:flex-end; justify-content:space-around; gap:8px; z-index:1; }
+  .chart-bars { position:relative; height:100%; display:flex; align-items:flex-end; justify-content:space-around; gap:8px; z-index:1; overflow-x:auto; }
   .bar-group { flex:1; max-width:70px; display:flex; flex-direction:column; align-items:center; height:100%; justify-content:flex-end; gap:6px; }
   .bar-pair { display:flex; align-items:flex-end; gap:4px; height:100%; width:100%; justify-content:center; }
   .bar { width:45%; max-width:22px; border-radius:6px 6px 0 0; }
@@ -96,9 +96,9 @@
 <body>
 <main>
   <div class="brand">
-    <span class="brand-logo-wrap"><img class="brand-logo" src="__LOGO__" alt="Gestão Financeira"><span class="brand-logo-ring"></span></span>
+    <span class="brand-logo-wrap"><img class="brand-logo" src="__LOGO__" alt="SGF"><span class="brand-logo-ring"></span></span>
     <div>
-      <h1>Gestão Financeira</h1>
+      <h1>Sistemas de Gestão Financeira</h1>
       <div class="sub" id="meta"></div>
     </div>
   </div>
@@ -119,7 +119,7 @@
   </div>
   <div class="charts-row">
   <section class="panel">
-    <h2>Comparativo dos últimos 6 meses <em>Entradas e saídas</em></h2>
+    <h2>Comparativo <em id="comparativoLegenda">Período filtrado</em></h2>
     <div class="chart-wrap">
       <div class="chart-y-axis" id="chartYAxis"></div>
       <div class="chart-grid-lines"><div></div><div></div><div></div><div></div><div></div></div>
@@ -138,6 +138,13 @@
   </section>
   </div>
   <section class="panel">
+    <h2>Entradas <em>Receitas da classificação financeira do SGF, somadas por dia. Esse relatório não separa por loja.</em></h2>
+    <div class="tabela"><table>
+      <thead><tr><th>Data</th><th>Descrição</th><th class="num">Recebida</th><th class="num">Em aberto</th><th class="num">Total</th></tr></thead>
+      <tbody id="entradas"></tbody>
+    </table></div>
+  </section>
+  <section class="panel">
     <h2>Saídas por origem <em id="origemLegenda">Total do período</em></h2>
     <div class="chart-wrap">
       <div class="chart-y-axis" id="origemY"></div>
@@ -147,25 +154,6 @@
     <p id="origemNota" class="origem-nota"></p>
   </section>
   <section class="panel">
-    <h2>Fornecedores por loja <em id="fornecedorLojaLegenda">Uma coluna por fornecedor em cada local</em></h2>
-    <div id="graficosLoja"></div>
-  </section>
-  <section class="panel">
-    <h2>Fornecedores <em>Soma de todas as lojas</em></h2>
-    <div id="graficoFornecedores"></div>
-  </section>
-  <section class="panel">
-    <h2>Pendentes por mês <em>Títulos em aberto, pelo mês de vencimento</em></h2>
-    <div id="graficoPendentes"></div>
-  </section>
-  <section class="panel">
-    <h2>Entradas <em>Receitas da classificação financeira do SGF, somadas por dia. Esse relatório não separa por loja.</em></h2>
-    <div class="tabela"><table>
-      <thead><tr><th>Data</th><th>Descrição</th><th class="num">Recebida</th><th class="num">Em aberto</th><th class="num">Total</th></tr></thead>
-      <tbody id="entradas"></tbody>
-    </table></div>
-  </section>
-  <section class="panel">
     <h2 id="tituloSaidas">Saídas</h2>
     <div class="row">
       <label>Descrição / fornecedor <select id="filtroFornecedor"><option value="">Todos</option></select></label>
@@ -173,6 +161,18 @@
     </div>
     <div class="totalizador" id="totalSaidas"></div>
     <div id="sessoesSaidas"></div>
+  </section>
+  <section class="panel">
+    <h2>Pendentes por mês <em>Títulos em aberto, pelo mês de vencimento</em></h2>
+    <div id="graficoPendentes"></div>
+  </section>
+  <section class="panel">
+    <h2>Fornecedores por loja <em id="fornecedorLojaLegenda">Uma coluna por fornecedor em cada local, fechado até abrir</em></h2>
+    <div id="graficosLoja"></div>
+  </section>
+  <section class="panel">
+    <h2>Fornecedores <em>Soma de todas as lojas</em></h2>
+    <div id="graficoFornecedores"></div>
   </section>
   <section class="panel">
     <h2>Saldos das contas</h2>
@@ -215,20 +215,54 @@ function agrupar(lista) {
 function linhasDoPeriodo(tipo, inicio, fim) {
   return (DADOS.linhas || []).filter(item => item.tipo === tipo && !item.atipico && dentro(item.data, inicio, fim));
 }
-function renderGrafico(fim) {
-  const base = new Date(fim + 'T12:00:00');
+function diaIso(data) {
+  return data.getFullYear() + '-' + String(data.getMonth() + 1).padStart(2, '0') + '-' + String(data.getDate()).padStart(2, '0');
+}
+function serieComparativo(inicio, fim) {
+  const porMes = inicio.slice(0, 7) !== fim.slice(0, 7);
   const serie = [];
-  for (let i = 5; i >= 0; i--) serie.push(new Date(base.getFullYear(), base.getMonth() - i, 1));
-  const dados = serie.map(data => {
-    const chave = data.getFullYear() + '-' + String(data.getMonth() + 1).padStart(2, '0');
-    const doMes = (DADOS.linhas || []).filter(item => !item.atipico && String(item.data || '').startsWith(chave));
-    return {
-      label: meses[data.getMonth()] + '/' + String(data.getFullYear()).slice(2),
-      pagar: soma(doMes.filter(item => item.tipo === 'pagar'), 'valor'),
-      receber: soma(doMes.filter(item => item.tipo === 'receber'), 'valor'),
-      atual: chave === fim.slice(0, 7)
-    };
-  });
+  if (porMes) {
+    const cursor = new Date(inicio.slice(0, 7) + '-01T12:00:00');
+    const limite = new Date(fim.slice(0, 7) + '-01T12:00:00');
+    while (cursor <= limite) {
+      const chave = chaveMes(cursor);
+      const doPeriodo = (DADOS.linhas || []).filter(item => !item.atipico && String(item.data || '').startsWith(chave) && dentro(item.data, inicio, fim));
+      serie.push({
+        label: meses[cursor.getMonth()] + '/' + String(cursor.getFullYear()).slice(2),
+        pagar: soma(doPeriodo.filter(item => item.tipo === 'pagar'), 'valor'),
+        receber: soma(doPeriodo.filter(item => item.tipo === 'receber'), 'valor'),
+        atual: chave === fim.slice(0, 7)
+      });
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+    return {porMes: true, serie: serie};
+  }
+  const cursor = new Date(inicio + 'T12:00:00');
+  const limite = new Date(fim + 'T12:00:00');
+  while (cursor <= limite) {
+    const chave = diaIso(cursor);
+    const doPeriodo = (DADOS.linhas || []).filter(item => !item.atipico && item.data === chave);
+    serie.push({
+      label: String(cursor.getDate()).padStart(2, '0') + '/' + String(cursor.getMonth() + 1).padStart(2, '0'),
+      pagar: soma(doPeriodo.filter(item => item.tipo === 'pagar'), 'valor'),
+      receber: soma(doPeriodo.filter(item => item.tipo === 'receber'), 'valor'),
+      atual: chave === fim
+    });
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return {porMes: false, serie: serie};
+}
+function renderGrafico(inicio, fim) {
+  const legenda = document.getElementById('comparativoLegenda');
+  const montado = (inicio && fim && fim >= inicio) ? serieComparativo(inicio, fim) : {porMes: false, serie: []};
+  if (legenda) legenda.textContent = montado.porMes ? 'Por mês, só no período filtrado' : 'Por dia, só no período filtrado';
+  const dados = montado.serie;
+  const barras = document.getElementById('chartBars');
+  if (!dados.length) {
+    document.getElementById('chartYAxis').innerHTML = '';
+    barras.innerHTML = '<div class="sub">Sem movimento neste período.</div>';
+    return;
+  }
   const maximo = Math.max(...dados.flatMap(item => [item.pagar, item.receber]), 1);
   const escala = Math.ceil(maximo / 1000) * 1000 || 1000;
   let eixo = '';
@@ -237,10 +271,13 @@ function renderGrafico(fim) {
     eixo += '<div>' + (valor >= 1000 ? (valor / 1000).toFixed(valor % 1000 === 0 ? 0 : 1) + 'k' : valor.toFixed(0)) + '</div>';
   }
   document.getElementById('chartYAxis').innerHTML = eixo;
-  document.getElementById('chartBars').innerHTML = dados.map(item => {
+  const estreito = dados.length > 8;
+  barras.style.justifyContent = estreito ? 'flex-start' : '';
+  barras.innerHTML = dados.map(item => {
     const alturaPagar = item.pagar === 0 ? 0 : Math.max(2, (item.pagar / escala) * 100);
     const alturaReceber = item.receber === 0 ? 0 : Math.max(2, (item.receber / escala) * 100);
-    return '<div class="bar-group"><div class="bar-pair"><div class="bar bar-pagar" style="height:' + alturaPagar + '%" title="Saídas: ' + moeda.format(item.pagar) + '"></div><div class="bar bar-receber" style="height:' + alturaReceber + '%" title="Entradas: ' + moeda.format(item.receber) + '"></div></div><div class="bar-label" style="' + (item.atual ? 'color:var(--accent);font-weight:800;' : '') + '">' + item.label + '</div></div>';
+    const medida = estreito ? ' style="flex:0 0 42px;max-width:42px;"' : '';
+    return '<div class="bar-group"' + medida + '><div class="bar-pair"><div class="bar bar-pagar" style="height:' + alturaPagar + '%" title="Saídas: ' + moeda.format(item.pagar) + '"></div><div class="bar bar-receber" style="height:' + alturaReceber + '%" title="Entradas: ' + moeda.format(item.receber) + '"></div></div><div class="bar-label" style="' + (item.atual ? 'color:var(--accent);font-weight:800;' : '') + '">' + item.label + '</div></div>';
   }).join('');
 }
 
@@ -371,6 +408,17 @@ function svgColunas(dados, girar) {
   svg += '</svg>';
   return '<div class="chart-scroll">' + svg + '</div>';
 }
+function alternarAberto(raiz) {
+  if (!raiz) return;
+  raiz.querySelectorAll('details').forEach(item => {
+    item.addEventListener('toggle', () => {
+      if (!item.open) return;
+      raiz.querySelectorAll('details').forEach(outro => {
+        if (outro !== item) outro.open = false;
+      });
+    });
+  });
+}
 function renderFornecedores(lista) {
   const lojas = document.getElementById('graficosLoja');
   const geral = document.getElementById('graficoFornecedores');
@@ -379,10 +427,12 @@ function renderFornecedores(lista) {
   const codigos = [...new Set(lista.map(item => codigoOrigem(item.filial)))].sort((a, b) => ordemOrigem(a) - ordemOrigem(b));
   lojas.innerHTML = codigos.map(codigo => {
     const linhas = lista.filter(item => codigoOrigem(item.filial) === codigo);
-    return '<section class="loja-bloco"><h3>' + esc(nomeOrigem(codigo)) + '</h3>' + svgColunas(gruposFornecedor(linhas), true) + '</section>';
+    const total = soma(linhas, 'valor');
+    return '<details class="sessao"><summary><span>' + esc(nomeOrigem(codigo)) + '</span><em>' + moeda.format(total) + '</em></summary>' + svgColunas(gruposFornecedor(linhas), true) + '</details>';
   }).join('') || '<p>Nenhuma saída neste recorte.</p>';
+  alternarAberto(lojas);
   geral.innerHTML = svgColunas(gruposFornecedor(lista), true);
-  if (legenda) legenda.textContent = codigos.length ? codigos.length + (codigos.length === 1 ? ' local' : ' locais') : 'Nenhum local neste recorte';
+  if (legenda) legenda.textContent = codigos.length ? codigos.length + (codigos.length === 1 ? ' local fechado' : ' locais fechados') + '. Abrir um fecha o outro.' : 'Nenhum local neste recorte';
 }
 function mesesDoRecorte(inicio, fim, chaves) {
   const lista = [...chaves].filter(Boolean).sort();
@@ -590,7 +640,7 @@ function render() {
   saldoEl.textContent = moeda.format(saldo);
   saldoEl.className = saldo >= 0 ? 'rec' : 'pay';
   document.getElementById('abertas').textContent = moeda.format(totais.aberto);
-  renderGrafico(fimDoGrafico(fim));
+  renderGrafico(inicio, fim);
   renderGraficoMetas(fimDoGrafico(fim));
   renderGraficoOrigem(saidasTitulos, (pendentes ? 'Somente em aberto' : (selecionado ? selecionado : 'Total do período')));
   notaOrigem(saidasPeriodo);
@@ -625,7 +675,7 @@ function render() {
   document.getElementById('meta').textContent = (DADOS.filial || '') + ' · atualizado em ' + textoQuando(DADOS.geradoEm || '');
   const contasFora = (DADOS.contas || []).filter(conta => Math.abs(conta.saldo) >= 1000000).map(conta => conta.nome);
   let nota = 'As entradas vêm da classificação financeira do SGF: cada movimento com tipo receita entra na soma do dia, sem divisão por loja.';
-  nota += ' As saídas vêm do contas a pagar, na mesma janela das entradas: do primeiro dia do mês, cerca de seis meses atrás, até os vencimentos dos próximos meses. Cada filial e a matriz ficam fechadas até serem abertas. Só pendentes esconde o que já foi pago e mantém os meses em aberto.';
+  nota += ' As saídas vêm do contas a pagar, do primeiro dia de cerca de seis meses atrás até a data de hoje. Cada filial, a matriz e cada loja em Fornecedores ficam fechadas até serem abertas. Só pendentes esconde o que já foi pago e mantém os meses em aberto.';
   nota += ' Atualizar pede um sincronismo em segundo plano; a tela continua no último sincronismo até ele terminar.';
   if (coberturaInicio && coberturaFim && (inicio < coberturaInicio || fim > coberturaFim)) {
     nota += ' O último sincronismo cobre ' + br(coberturaInicio) + ' a ' + br(coberturaFim) + '.';
@@ -677,19 +727,32 @@ function pintarIdade() {
 pintarIdade();
 setInterval(pintarIdade, 15000);
 
+function hojeFortaleza() {
+  const partes = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Fortaleza',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(new Date());
+  const mapa = {};
+  partes.forEach(parte => { mapa[parte.type] = parte.value; });
+  return mapa.year + '-' + mapa.month + '-' + mapa.day;
+}
 const inicioEl = document.getElementById('inicio');
 const fimEl = document.getElementById('fim');
-const agora = new Date();
-if (coberturaInicio && coberturaFim) {
-  inicioEl.value = coberturaInicio;
-  fimEl.value = coberturaFim;
-} else {
-  inicioEl.value = isoLocal(new Date(agora.getFullYear(), agora.getMonth(), 1));
-  fimEl.value = isoLocal(agora);
+const vigente = hojeFortaleza();
+inicioEl.max = vigente;
+fimEl.max = vigente;
+inicioEl.value = (coberturaInicio && coberturaInicio <= vigente) ? coberturaInicio : vigente.slice(0, 8) + '01';
+fimEl.value = vigente;
+function limitarAoVigente() {
+  if (fimEl.value > vigente) fimEl.value = vigente;
+  if (inicioEl.value > vigente) inicioEl.value = vigente;
+  if (inicioEl.value && fimEl.value && inicioEl.value > fimEl.value) inicioEl.value = fimEl.value;
 }
-document.getElementById('buscar').onclick = render;
-inicioEl.onchange = render;
-fimEl.onchange = render;
+document.getElementById('buscar').onclick = function() { limitarAoVigente(); render(); };
+inicioEl.onchange = function() { limitarAoVigente(); render(); };
+fimEl.onchange = function() { limitarAoVigente(); render(); };
 render();
 </script>
 </body>
