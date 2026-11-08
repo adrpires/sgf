@@ -278,6 +278,11 @@ class Sincronismo(unittest.TestCase):
         cliente, resposta = self.entrar()
         token = csrf_de(resposta.get_data(as_text=True))
         self.assertIn(">Dashboard<", resposta.get_data(as_text=True))
+        self.assertIn("menu-usuario", resposta.get_data(as_text=True))
+        self.assertLess(
+            resposta.get_data(as_text=True).find("Administrador"),
+            resposta.get_data(as_text=True).find(">Sair<"),
+        )
         self.assertIn("menu-logo", resposta.get_data(as_text=True))
         self.assertIn("Relatório de entradas e despesas manual", resposta.get_data(as_text=True))
         self.assertIn('class="hamburguer"', resposta.get_data(as_text=True))
