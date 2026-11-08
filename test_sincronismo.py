@@ -271,6 +271,7 @@ class Sincronismo(unittest.TestCase):
         self.assertIn("cerca de seis meses atrás", sync_sgf.HTML)
         self.assertIn("Sistemas de Gestão Financeira", sync_sgf.HTML)
         self.assertIn("Meta de Despesas", sync_sgf.HTML)
+        self.assertIn('stroke="transparent" stroke-width="14"', sync_sgf.HTML)
         self.assertIn("Desenvolvido pela APSI Telecom", sync_sgf.HTML)
         self.assertIn("hojeFortaleza", sync_sgf.HTML)
         self.assertIn("alternarAberto", sync_sgf.HTML)

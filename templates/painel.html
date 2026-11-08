@@ -565,7 +565,11 @@ function renderGraficoMetas(fim) {
       mover = false;
     });
     svg += '<g class="' + (item.estourou ? 'serie-alerta' : 'serie-neutra') + '" data-origem="' + esc(item.codigo) + '" data-alerta="' + (item.estourou ? '1' : '0') + '">';
-    if (caminho) svg += '<path d="' + caminho.trim() + '" fill="none" stroke="' + cor + '" stroke-width="' + (item.estourou ? '3' : '1.75') + '" stroke-linejoin="round" stroke-linecap="round"></path>';
+    if (caminho) {
+      const traco = caminho.trim();
+      svg += '<path d="' + traco + '" fill="none" stroke="transparent" stroke-width="14" stroke-linejoin="round" stroke-linecap="round"><title>' + esc(item.nome) + '</title></path>';
+      svg += '<path d="' + traco + '" fill="none" stroke="' + cor + '" stroke-width="' + (item.estourou ? '3' : '1.75') + '" stroke-linejoin="round" stroke-linecap="round" pointer-events="none"></path>';
+    }
     item.pontos.forEach((ponto, indice) => {
       if (ponto.nulo) return;
       const x = xDe(indice);
