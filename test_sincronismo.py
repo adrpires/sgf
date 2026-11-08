@@ -270,6 +270,7 @@ class Sincronismo(unittest.TestCase):
         self.assertIn("fimDoGrafico", sync_sgf.HTML)
         self.assertIn("cerca de seis meses atrás", sync_sgf.HTML)
         self.assertIn("Sistemas de Gestão Financeira", sync_sgf.HTML)
+        self.assertIn("Desenvolvido pela APSI Telecom", sync_sgf.HTML)
         self.assertIn("hojeFortaleza", sync_sgf.HTML)
         self.assertIn("alternarAberto", sync_sgf.HTML)
         self.assertIn("serieComparativo", sync_sgf.HTML)
