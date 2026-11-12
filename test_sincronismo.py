@@ -448,6 +448,26 @@ class Sincronismo(unittest.TestCase):
         self.assertIn("Receita geral", completo)
         self.assertIn("Conta secreta", completo)
         self.assertNotIn('"acessoLojas"', completo)
+        todas = admin.post(
+            "/usuarios/novo",
+            data={
+                "csrf": token,
+                "nome": "Geral",
+                "login": "geral",
+                "perfil": "admin",
+                "senha": "senha1234",
+                "confirmar": "senha1234",
+                "lojas": ["1", "2", "100"],
+            },
+            follow_redirects=True,
+        )
+        self.assertIn("Usuário cadastrado", todas.get_data(as_text=True))
+        amplo, _ = self.entrar("geral", "senha1234")
+        visao = amplo.get("/").get_data(as_text=True)
+        self.assertIn("Receita geral", visao)
+        self.assertIn("Fornecedor Filial", visao)
+        self.assertIn("Conta secreta", visao)
+        self.assertNotIn('"acessoLojas"', visao)
 
     def test_backup_diario_fica_fora_e_preserva_outros_arquivos(self):
         pasta = RAIZ / "backup-teste"

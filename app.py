@@ -679,8 +679,15 @@ def texto_percentual(valor):
     return f"{numero:.1f}".replace(".", ",")
 
 
-def filtrar_acesso(dados, permitidas):
+def acesso_completo(permitidas):
     if permitidas is None:
+        return True
+    conhecidas = {item["codigo"] for item in origens_disponiveis()}
+    return bool(conhecidas) and conhecidas <= set(permitidas)
+
+
+def filtrar_acesso(dados, permitidas):
+    if acesso_completo(permitidas):
         return dados
     base = dict(dados or {})
     titulos = []

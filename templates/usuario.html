@@ -21,7 +21,7 @@
     {% endif %}
     <fieldset>
       <legend>Lojas com acesso</legend>
-      <p>Os relatórios mostram somente as lojas marcadas. Enquanto nenhuma loja estiver salva, o usuário vê todas.</p>
+      <p>Marcar todas as lojas libera o comparativo e as entradas do SGF. Marcar só algumas esconde esses números, porque a classificação financeira não separa por loja.</p>
       {% for loja in lojas %}
       <label class="check"><input type="checkbox" name="lojas" value="{{ loja.codigo }}" {{ "checked" if loja.marcada else "" }}> {{ loja.nome }}</label>
       {% endfor %}
