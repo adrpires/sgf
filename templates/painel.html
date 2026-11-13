@@ -51,7 +51,7 @@
   .sub { color:var(--muted); }
   .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:16px; }
   button { border:1px solid var(--line); background:#fff; border-radius:8px; padding:6px 10px; cursor:pointer; }
-  .cards { display:flex; flex-direction:column; gap:12px; min-width:0; }
+  .cards { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:12px; min-width:0; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:14px; box-shadow:0 8px 24px rgba(16,32,51,.04); min-width:0; }
   .card span { display:block; color:var(--muted); font-size:12px; }
   .card strong { display:block; font-size:22px; overflow-wrap:anywhere; }
@@ -122,9 +122,11 @@
   .chart-legend { flex-wrap:wrap; }
   .serie-alerta { font-weight:800; }
   #avisosMeta:empty { display:none; }
+  .subtipo { margin:14px 0 8px; font-size:14px; }
   @media (max-width:800px) {
     .charts-row { flex-direction:column; }
     .charts-row > .panel { flex-basis:auto; width:100%; }
+    .cards { grid-template-columns:1fr; }
   }
 </style>
 </head>
@@ -202,6 +204,10 @@ __MENU__
     <div id="sessoesSaidas"></div>
   </section>
   <section class="panel">
+    <h2>Conciliação por loja <em id="conciliacaoLegenda">Meta mensal de cada tipo de despesa contra o gasto do período</em></h2>
+    <div id="conciliacaoTipos"></div>
+  </section>
+  <section class="panel">
     <h2>Pendentes por mês <em>Títulos em aberto, pelo mês de vencimento</em></h2>
     <div id="graficoPendentes"></div>
   </section>
@@ -255,6 +261,8 @@ alinharMarca();
 const DADOS = __DADOS__;
 const METAS = __METAS__;
 const METAS_ORIGEM = __METAS_ORIGEM__;
+const TIPOS_DESPESA = __TIPOS_DESPESA__;
+const MAPA_TIPO = __MAPA_TIPO__;
 const moeda = new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'});
 const titulosEmbutidos = DADOS.titulos || [];
 let titulosConsulta = null;
@@ -697,6 +705,85 @@ function renderAlertas(inicio, fim) {
   }).join('');
 }
 
+function tabelaTitulos(linhas) {
+  const parcial = totaisDe(linhas);
+  return '<div class="tabela"><table><thead><tr><th>Descrição</th><th>Documento</th><th>Emissão</th><th>Vencimento</th><th class="num">Valor</th><th class="num">Pago</th><th class="num">Juros</th><th>Pagamento</th><th>Observação</th></tr></thead><tbody>'
+    + linhas.map(item =>
+      '<tr class="' + (item.atipico ? 'atipico' : '') + '"><td>' + esc(item.fornecedor) + '</td><td>' + esc(item.documento) + '</td><td>' + br(item.emissao) + '</td><td>' + br(item.vencimento) + '</td><td class="num">' + moedaOuVazio(item.valor) + '</td><td class="num">' + (item.atipico ? 'ilegível' : moedaOuVazio(item.pago)) + '</td><td class="num">' + (item.atipico ? '' : moedaOuVazio(item.juros)) + '</td><td>' + (item.pagamento ? br(item.pagamento) : 'Em aberto') + '</td><td>' + esc(item.obs) + '</td></tr>'
+    ).join('')
+    + '</tbody><tfoot><tr><td colspan="4">Subtotal · ' + parcial.quantidade + (parcial.quantidade === 1 ? ' título' : ' títulos') + '</td><td class="num">' + moeda.format(parcial.valor) + '</td><td class="num">' + moeda.format(parcial.pago) + '</td><td></td><td class="num">' + moeda.format(parcial.aberto) + '</td><td></td></tr></tfoot></table></div>';
+}
+function tipoDoTitulo(item) {
+  const mapa = (typeof MAPA_TIPO === 'object' && MAPA_TIPO) || {};
+  const nome = String(item.fornecedor || '').trim();
+  return mapa[nome] || mapa[item.fornecedor] || '';
+}
+function gruposDespesa(linhas) {
+  const mapa = new Map();
+  linhas.forEach(item => {
+    const tipo = tipoDoTitulo(item) || 'Sem tipo';
+    if (!mapa.has(tipo)) mapa.set(tipo, []);
+    mapa.get(tipo).push(item);
+  });
+  const nomes = [...mapa.keys()].sort((a, b) => {
+    if (a === 'Sem tipo') return 1;
+    if (b === 'Sem tipo') return -1;
+    return a.localeCompare(b, 'pt');
+  });
+  return nomes.map(nome => {
+    const grupo = mapa.get(nome);
+    const parcial = totaisDe(grupo);
+    return '<h3 class="subtipo">' + esc(nome) + ' · ' + moeda.format(parcial.valor) + '</h3>' + tabelaTitulos(grupo);
+  }).join('') || '<p>Nenhuma saída nesse período.</p>';
+}
+function mesesNoFiltro(inicio, fim) {
+  if (!inicio || !fim || inicio > fim) return 1;
+  const cursor = new Date(inicio.slice(0, 7) + '-01T12:00:00');
+  const limite = new Date(fim.slice(0, 7) + '-01T12:00:00');
+  let quantidade = 0;
+  while (cursor <= limite && quantidade < 36) {
+    quantidade += 1;
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+  return Math.max(1, quantidade);
+}
+function renderConciliacao(titulos, inicio, fim) {
+  const caixa = document.getElementById('conciliacaoTipos');
+  const legenda = document.getElementById('conciliacaoLegenda');
+  if (!caixa) return;
+  const tipos = Array.isArray(TIPOS_DESPESA) ? TIPOS_DESPESA : [];
+  const fator = mesesNoFiltro(inicio, fim);
+  if (legenda) {
+    legenda.textContent = fator === 1
+      ? 'Meta mensal de cada tipo de despesa contra o gasto do período'
+      : 'Meta mensal × ' + fator + ' meses do filtro, contra o gasto do período';
+  }
+  if (!tipos.length) {
+    caixa.innerHTML = '<p>Nenhum tipo de despesa com meta. Defina em Meta de Despesas.</p>';
+    return;
+  }
+  const lojas = [...new Set(titulos.map(item => codigoOrigem(item.filial)))].sort((a, b) => ordemOrigem(a) - ordemOrigem(b));
+  if (!lojas.length) {
+    caixa.innerHTML = '<p>Nenhuma saída neste período.</p>';
+    return;
+  }
+  caixa.innerHTML = lojas.map(codigo => {
+    const daLoja = titulos.filter(item => codigoOrigem(item.filial) === codigo);
+    const linhas = tipos.map(tipo => {
+      const gasto = soma(daLoja.filter(item => tipoDoTitulo(item) === tipo.nome), 'valor');
+      const meta = (Number(tipo.valor) || 0) * fator;
+      const folga = meta - gasto;
+      const pct = meta > 0 ? (gasto / meta) * 100 : 0;
+      return '<tr class="' + (folga < 0 ? 'atipico' : '') + '"><td>' + esc(tipo.nome) + '</td><td class="num">' + moeda.format(meta) + '</td><td class="num">' + moeda.format(gasto) + '</td><td class="num ' + (folga < 0 ? 'pay' : 'rec') + '">' + moeda.format(folga) + '</td><td class="num">' + (meta > 0 ? textoPct(pct) : '—') + '</td></tr>';
+    }).join('');
+    const semTipo = soma(daLoja.filter(item => !tipoDoTitulo(item)), 'valor');
+    const extra = semTipo > 0
+      ? '<tr><td>Sem tipo</td><td class="num">—</td><td class="num">' + moeda.format(semTipo) + '</td><td class="num">—</td><td class="num">—</td></tr>'
+      : '';
+    return '<details class="sessao"><summary><span>' + esc(nomeOrigem(codigo)) + '</span></summary><div class="tabela"><table><thead><tr><th>Tipo de despesa</th><th class="num">Meta</th><th class="num">Gasto</th><th class="num">Diferença</th><th class="num">Uso</th></tr></thead><tbody>' + linhas + extra + '</tbody></table></div></details>';
+  }).join('');
+}
+
 function render() {
   const inicio = document.getElementById('inicio').value;
   const fim = document.getElementById('fim').value;
@@ -736,6 +823,7 @@ function render() {
   renderGraficoOrigem(saidasTitulos, (pendentes ? 'Somente em aberto' : (selecionado ? selecionado : 'Total do período')));
   notaOrigem(saidasPeriodo);
   renderFornecedores(saidasTitulos);
+  renderConciliacao(titulos.filter(item => dentro(item.vencimento, inicio, fim)), inicio, fim);
   renderPendentesMes(saidasPeriodo, inicio, fim);
 
   document.getElementById('entradas').innerHTML = agrupar(entradas).map(item =>
@@ -745,18 +833,16 @@ function render() {
   const titulo = document.getElementById('tituloSaidas');
   const sessoes = document.getElementById('sessoesSaidas');
   const caixaTotal = document.getElementById('totalSaidas');
-  titulo.innerHTML = 'Saídas <em>' + (selecionado ? esc(selecionado) : 'Uma subseção por origem') + '</em>';
+  titulo.innerHTML = 'Saídas <em>' + (selecionado ? esc(selecionado) : 'Fornecedores e tipo de despesa, por origem') + '</em>';
   caixaTotal.innerHTML = textoTotais('Total', totais);
   const origens = [...new Set(saidasTitulos.map(item => codigoOrigem(item.filial)))].sort((a, b) => ordemOrigem(a) - ordemOrigem(b));
   sessoes.innerHTML = origens.map(codigo => {
     const linhas = saidasTitulos.filter(item => codigoOrigem(item.filial) === codigo);
     const parcial = totaisDe(linhas);
     return '<details class="sessao"><summary><span>' + esc(nomeOrigem(codigo)) + '</span><em>Total ' + moeda.format(parcial.valor) + ' · Em aberto ' + moeda.format(parcial.aberto) + '</em></summary>'
-      + '<div class="tabela"><table><thead><tr><th>Descrição</th><th>Documento</th><th>Emissão</th><th>Vencimento</th><th class="num">Valor</th><th class="num">Pago</th><th class="num">Juros</th><th>Pagamento</th><th>Observação</th></tr></thead><tbody>'
-      + linhas.map(item =>
-        '<tr class="' + (item.atipico ? 'atipico' : '') + '"><td>' + esc(item.fornecedor) + '</td><td>' + esc(item.documento) + '</td><td>' + br(item.emissao) + '</td><td>' + br(item.vencimento) + '</td><td class="num">' + moedaOuVazio(item.valor) + '</td><td class="num">' + (item.atipico ? 'ilegível' : moedaOuVazio(item.pago)) + '</td><td class="num">' + (item.atipico ? '' : moedaOuVazio(item.juros)) + '</td><td>' + (item.pagamento ? br(item.pagamento) : 'Em aberto') + '</td><td>' + esc(item.obs) + '</td></tr>'
-      ).join('')
-      + '</tbody><tfoot><tr><td colspan="4">Subtotal · ' + parcial.quantidade + (parcial.quantidade === 1 ? ' título' : ' títulos') + '</td><td class="num">' + moeda.format(parcial.valor) + '</td><td class="num">' + moeda.format(parcial.pago) + '</td><td></td><td class="num">' + moeda.format(parcial.aberto) + '</td><td></td></tr></tfoot></table></div></details>';
+      + '<h3 class="subtipo">Tipo Fornecedores</h3>' + tabelaTitulos(linhas)
+      + '<h3 class="subtipo">Tipo Despesa</h3>' + gruposDespesa(linhas)
+      + '</details>';
   }).join('') || '<p>Nenhuma saída nesse período.</p>';
 
   document.getElementById('contas').innerHTML = (DADOS.contas || []).map(conta =>
@@ -767,7 +853,7 @@ function render() {
   if (typeof alinharMarca === 'function') alinharMarca();
   const contasFora = (DADOS.contas || []).filter(conta => Math.abs(conta.saldo) >= 1000000).map(conta => conta.nome);
   let nota = 'As entradas vêm da classificação financeira do SGF: cada movimento com tipo receita entra na soma do dia, sem divisão por loja.';
-  nota += ' As saídas vêm do contas a pagar, do primeiro dia de cerca de seis meses atrás até a data de hoje, e incluem as despesas lançadas manualmente. As entradas manuais entram na mesma soma, com a loja no nome. Cada filial, a matriz e cada loja em Fornecedores ficam fechadas até serem abertas. Só pendentes esconde o que já foi pago e mantém os meses em aberto.';
+  nota += ' As saídas vêm do contas a pagar, do primeiro dia de cerca de seis meses atrás até a data de hoje, e incluem as despesas lançadas manualmente. Cada loja lista os títulos como fornecedores e, de novo, agrupados pelo tipo de despesa. A conciliação usa a meta mensal do tipo contra o gasto da loja no período. As entradas manuais entram na mesma soma, com a loja no nome. Cada filial, a matriz e cada loja em Fornecedores ficam fechadas até serem abertas. Só pendentes esconde o que já foi pago e mantém os meses em aberto.';
   nota += ' Atualizar pede um sincronismo em segundo plano; a tela continua no último sincronismo até ele terminar.';
   nota += ' A consulta do período lê a base gravada no sincronismo. Ela só muda quando o cursor sai da data ou depois de dois segundos sem digitar.';
   if (coberturaInicio && coberturaFim && (inicio < coberturaInicio || fim > coberturaFim)) {

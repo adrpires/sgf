@@ -625,6 +625,70 @@ class Sincronismo(unittest.TestCase):
         self.assertEqual(corpo["porOrigemMes"], [{"origem": "2", "mes": "2026-11", "valor": 5.0}])
         self.assertIn("2", corpo["filiais"])
 
+    def test_cards_em_linha_e_meta_por_tipo_de_despesa(self):
+        dados = {
+            "geradoEm": "2026-11-13T10:00:00-03:00",
+            "titulos": [
+                {
+                    "fornecedor": "Energia",
+                    "documento": "1",
+                    "filial": "2",
+                    "emissao": "2026-11-02",
+                    "vencimento": "2026-11-10",
+                    "pagamento": "",
+                    "valor": 80,
+                    "pago": 0,
+                    "juros": 0,
+                    "obs": "",
+                    "atipico": False,
+                }
+            ],
+            "linhas": [],
+            "contas": [],
+            "filial": "Teste",
+        }
+        PAINEL_CAMINHO.write_text(
+            "<!DOCTYPE html><html><body><script>const DADOS = " + json.dumps(dados) + ";</script></body></html>",
+            encoding="utf-8",
+        )
+        cliente, _resposta = self.entrar()
+        pagina = cliente.get("/metas")
+        html = pagina.get_data(as_text=True)
+        self.assertIn("Energia", html)
+        token = csrf_de(html)
+        salvo = cliente.post(
+            "/metas/tipos",
+            data={"csrf": token, "nome": "Aluguel", "valor": "1.000,00"},
+            follow_redirects=True,
+        )
+        self.assertIn("Tipo de despesa salvo", salvo.get_data(as_text=True))
+        pagina = cliente.get("/metas")
+        token = csrf_de(pagina.get_data(as_text=True))
+        recusado = cliente.post(
+            "/metas/vinculos",
+            data={"csrf": token, "fornecedor": "Nao existe", "tipo": "Aluguel"},
+            follow_redirects=True,
+        )
+        self.assertIn("Fornecedor desconhecido", recusado.get_data(as_text=True))
+        pagina = cliente.get("/metas")
+        token = csrf_de(pagina.get_data(as_text=True))
+        vinculo = cliente.post(
+            "/metas/vinculos",
+            data={"csrf": token, "fornecedor": "Energia", "tipo": "Aluguel"},
+            follow_redirects=True,
+        )
+        self.assertIn("Vínculos de despesa salvos", vinculo.get_data(as_text=True))
+        painel = cliente.get("/").get_data(as_text=True)
+        self.assertIn("grid-template-columns:repeat(4, minmax(0, 1fr))", painel)
+        self.assertIn(".cards { grid-template-columns:1fr; }", painel)
+        self.assertIn("Tipo Fornecedores", painel)
+        self.assertIn("Tipo Despesa", painel)
+        self.assertIn('id="conciliacaoTipos"', painel)
+        self.assertIn("Aluguel", painel)
+        self.assertIn('"Energia": "Aluguel"', painel)
+        self.assertNotIn("__TIPOS_DESPESA__", painel)
+        self.assertNotIn("__MAPA_TIPO__", painel)
+
 
 if __name__ == "__main__":
     unittest.main()

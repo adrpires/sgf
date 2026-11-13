@@ -75,6 +75,22 @@ def preparar():
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS tipos_despesa (
+                nome TEXT PRIMARY KEY,
+                valor REAL NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fornecedor_tipo (
+                fornecedor TEXT PRIMARY KEY,
+                tipo TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS usuarios (
                 id INTEGER PRIMARY KEY,
                 login TEXT NOT NULL UNIQUE,
@@ -704,6 +720,46 @@ def metas_origem_salvas():
     return {item["origem"]: item["valor"] for item in linhas}
 
 
+def normalizar_tipo(nome):
+    nome = " ".join(str(nome or "").split())
+    if not nome or len(nome) > 60:
+        return ""
+    if any(ord(caractere) < 32 or caractere in "<>&" for caractere in nome):
+        return ""
+    return nome
+
+
+def listar_tipos_despesa():
+    with conectar() as conn:
+        linhas = conn.execute("SELECT nome, valor FROM tipos_despesa ORDER BY nome").fetchall()
+    return [{"nome": item["nome"], "valor": item["valor"]} for item in linhas]
+
+
+def mapa_fornecedor_tipo():
+    with conectar() as conn:
+        linhas = conn.execute("SELECT fornecedor, tipo FROM fornecedor_tipo ORDER BY fornecedor").fetchall()
+    return {item["fornecedor"]: item["tipo"] for item in linhas}
+
+
+def fornecedores_conhecidos():
+    nomes = set(mapa_fornecedor_tipo())
+    for item in dados_painel().get("titulos") or []:
+        if not isinstance(item, dict):
+            continue
+        nome = " ".join(str(item.get("fornecedor") or "").split())
+        if nome and len(nome) <= 180:
+            nomes.add(nome)
+    return sorted(nomes, key=lambda texto: texto.casefold())
+
+
+def extras_metas():
+    return {
+        "tipos": listar_tipos_despesa(),
+        "fornecedores": fornecedores_conhecidos(),
+        "mapa": mapa_fornecedor_tipo(),
+    }
+
+
 def percentual_aviso():
     with conectar() as conn:
         row = conn.execute("SELECT valor FROM configuracao WHERE chave = ?", ("meta_percentual",)).fetchone()
@@ -1037,6 +1093,8 @@ def painel():
         barra += bloco_atualizar(csrf, str(dados_painel().get("geradoEm") or ""))
     conteudo = conteudo.replace("__METAS_ORIGEM__", json.dumps(payload_metas_origem(acesso_lojas(usuario)), ensure_ascii=False), 1)
     conteudo = conteudo.replace("__METAS__", json.dumps(listar_metas(), ensure_ascii=False), 1)
+    conteudo = conteudo.replace("__TIPOS_DESPESA__", json.dumps(listar_tipos_despesa(), ensure_ascii=False), 1)
+    conteudo = conteudo.replace("__MAPA_TIPO__", json.dumps(mapa_fornecedor_tipo(), ensure_ascii=False), 1)
     conteudo = conteudo.replace('"__CSRF__"', json.dumps(csrf), 1)
     conteudo = conteudo.replace("__TEMA__", html.escape(tema_atual()), 1)
     conteudo = conteudo.replace("__MENU__", montar_menu(usuario, request.path), 1)
@@ -1659,6 +1717,7 @@ def metas_form():
         linhas=linhas_formulario(permitidas=acesso_lojas(usuario)),
         percentual=texto_percentual(percentual_aviso()),
         csrf=garantir_csrf(),
+        **extras_metas(),
     )
 
 
@@ -1708,6 +1767,7 @@ def metas_post():
             linhas=linhas_formulario(textos, acesso_lojas(usuario)),
             percentual=request.form.get("percentual", ""),
             csrf=garantir_csrf(),
+            **extras_metas(),
         )
     with conectar() as conn:
         conn.execute(
@@ -1742,6 +1802,121 @@ def metas_excluir(meta_id):
     with conectar() as conn:
         conn.execute("DELETE FROM metas WHERE id = ?", (meta_id,))
     session["aviso"] = "Meta excluída."
+    return redirect("/metas")
+
+
+@app.post("/metas/tipos")
+def metas_tipos_post():
+    usuario, resposta = exigir_login()
+    if resposta:
+        return resposta
+    if not usuario["admin"] or not csrf_ok():
+        return redirect("/")
+    nome = normalizar_tipo(request.form.get("nome", ""))
+    valor, falha = ler_meta_form(request.form.get("valor", ""))
+    erro = ""
+    if not nome:
+        erro = "Informe o tipo de despesa com até 60 caracteres."
+    elif falha or valor is None:
+        erro = falha or "Informe a meta mensal do tipo com um valor maior que zero."
+    if erro:
+        return render_template(
+            "metas.html",
+            erro=erro,
+            aviso="",
+            linhas=linhas_formulario(permitidas=acesso_lojas(usuario)),
+            percentual=texto_percentual(percentual_aviso()),
+            csrf=garantir_csrf(),
+            **extras_metas(),
+        )
+    gravado = nome
+    with conectar() as conn:
+        igual = conn.execute(
+            "SELECT nome FROM tipos_despesa WHERE nome = ? COLLATE NOCASE",
+            (nome,),
+        ).fetchone()
+        if igual:
+            gravado = igual["nome"]
+        conn.execute(
+            """
+            INSERT INTO tipos_despesa (nome, valor) VALUES (?, ?)
+            ON CONFLICT(nome) DO UPDATE SET valor = excluded.valor
+            """,
+            (gravado, valor),
+        )
+    session["aviso"] = "Tipo de despesa salvo."
+    return redirect("/metas")
+
+
+@app.post("/metas/tipos/excluir")
+def metas_tipos_excluir():
+    usuario, resposta = exigir_login()
+    if resposta:
+        return resposta
+    if not usuario["admin"] or not csrf_ok():
+        return redirect("/")
+    nome = normalizar_tipo(request.form.get("nome", ""))
+    if nome:
+        with conectar() as conn:
+            conn.execute("DELETE FROM fornecedor_tipo WHERE tipo = ?", (nome,))
+            conn.execute("DELETE FROM tipos_despesa WHERE nome = ?", (nome,))
+    session["aviso"] = "Tipo de despesa excluído."
+    return redirect("/metas")
+
+
+@app.post("/metas/vinculos")
+def metas_vinculos_post():
+    usuario, resposta = exigir_login()
+    if resposta:
+        return resposta
+    if not usuario["admin"] or not csrf_ok():
+        return redirect("/")
+    fornecedores = request.form.getlist("fornecedor")
+    tipos = request.form.getlist("tipo")
+    conhecidos = set(fornecedores_conhecidos())
+    validos = {item["nome"] for item in listar_tipos_despesa()}
+    erro = ""
+    pares = []
+    if len(fornecedores) != len(tipos) or len(fornecedores) > 2000:
+        erro = "Não foi possível ler os vínculos."
+    else:
+        vistos = set()
+        for fornecedor, tipo in zip(fornecedores, tipos):
+            fornecedor = " ".join(str(fornecedor or "").split())
+            tipo = normalizar_tipo(tipo) if str(tipo or "").strip() else ""
+            if not fornecedor or fornecedor in vistos:
+                continue
+            vistos.add(fornecedor)
+            if fornecedor not in conhecidos:
+                erro = "Fornecedor desconhecido."
+                break
+            if tipo and tipo not in validos:
+                erro = "Tipo de despesa desconhecido."
+                break
+            pares.append((fornecedor, tipo))
+    if erro:
+        return render_template(
+            "metas.html",
+            erro=erro,
+            aviso="",
+            linhas=linhas_formulario(permitidas=acesso_lojas(usuario)),
+            percentual=texto_percentual(percentual_aviso()),
+            csrf=garantir_csrf(),
+            **extras_metas(),
+        )
+    with conectar() as conn:
+        for fornecedor, tipo in pares:
+            if tipo:
+                conn.execute(
+                    """
+                    INSERT INTO fornecedor_tipo (fornecedor, tipo) VALUES (?, ?)
+                    ON CONFLICT(fornecedor) DO UPDATE SET tipo = excluded.tipo
+                    """,
+                    (fornecedor, tipo),
+                )
+            else:
+                conn.execute("DELETE FROM fornecedor_tipo WHERE fornecedor = ?", (fornecedor,))
+    session["aviso"] = "Vínculos de despesa salvos."
     return redirect("/metas")
 
 

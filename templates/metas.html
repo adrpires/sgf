@@ -34,5 +34,83 @@
     {% endif %}
     <button type="submit">Salvar</button>
   </form>
+
+  <h2 style="margin-top:28px">Tipos de despesa</h2>
+  <p>Cada tipo tem uma meta mensal. O painel compara essa meta com o gasto do período em cada loja. O vínculo diz qual fornecedor entra em qual tipo.</p>
+  <form class="card" method="post" action="/metas/tipos">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label for="nomeTipo">Tipo de despesa</label>
+    <input id="nomeTipo" name="nome" required maxlength="60" placeholder="Aluguel">
+    <label for="valorTipo">Meta mensal (R$)</label>
+    <input id="valorTipo" name="valor" required inputmode="decimal" maxlength="18" placeholder="0,00">
+    <button type="submit">Salvar tipo</button>
+  </form>
+  {% if tipos %}
+  <table style="margin-top:16px">
+    <thead><tr><th>Tipo</th><th>Meta mensal (R$)</th><th></th></tr></thead>
+    <tbody>
+    {% for tipo in tipos %}
+      <tr>
+        <td>{{ tipo.nome }}</td>
+        <td>
+          <form method="post" action="/metas/tipos" style="display:flex;gap:8px;align-items:center;margin:0">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <input type="hidden" name="nome" value="{{ tipo.nome }}">
+            <input name="valor" inputmode="decimal" maxlength="18" value="{{ '%.2f'|format(tipo.valor)|replace('.', ',') }}" aria-label="Meta mensal de {{ tipo.nome }}">
+            <button type="submit">Salvar</button>
+          </form>
+        </td>
+        <td>
+          <form method="post" action="/metas/tipos/excluir" style="margin:0">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <input type="hidden" name="nome" value="{{ tipo.nome }}">
+            <button class="claro" type="submit">Excluir</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <h2 style="margin-top:28px">Fornecedor em cada tipo</h2>
+  {% if fornecedores %}
+  <form class="card" method="post" action="/metas/vinculos">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label for="filtroTipoFornecedor">Filtrar fornecedor</label>
+    <input id="filtroTipoFornecedor" type="search" placeholder="Digite para esconder as outras linhas">
+    <table id="vinculosFornecedor" style="margin-top:16px">
+      <thead><tr><th>Fornecedor</th><th>Tipo de despesa</th></tr></thead>
+      <tbody>
+      {% for nome in fornecedores %}
+        <tr data-fornecedor="{{ nome }}">
+          <td>{{ nome }}</td>
+          <td>
+            <input type="hidden" name="fornecedor" value="{{ nome }}">
+            <select name="tipo" aria-label="Tipo de {{ nome }}">
+              <option value="">Sem tipo</option>
+              {% for tipo in tipos %}
+              <option value="{{ tipo.nome }}" {% if mapa.get(nome) == tipo.nome %}selected{% endif %}>{{ tipo.nome }}</option>
+              {% endfor %}
+            </select>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <button type="submit">Salvar vínculos</button>
+  </form>
+  <script>
+  document.getElementById('filtroTipoFornecedor').addEventListener('input', function() {
+    var termo = this.value.toLocaleLowerCase('pt-BR');
+    document.querySelectorAll('#vinculosFornecedor tbody tr').forEach(function(linha) {
+      var nome = (linha.getAttribute('data-fornecedor') || '').toLocaleLowerCase('pt-BR');
+      linha.hidden = !!termo && nome.indexOf(termo) < 0;
+    });
+  });
+  </script>
+  {% else %}
+  <p>Nenhum fornecedor no último sincronismo. Os nomes aparecem aqui depois de atualizar o painel.</p>
+  {% endif %}
 </main>
 {% endblock %}
