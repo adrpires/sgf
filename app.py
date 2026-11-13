@@ -1382,7 +1382,7 @@ def caixa_form():
         erro="" if feito.get("ok", True) or consultando or not pedido_id else "A consulta no SGF não concluiu. A tabela continua com o último movimento obtido.",
         aviso=session.pop("aviso", ""),
         csrf=garantir_csrf(),
-        inicio=str(feito.get("inicio") or (hoje - timedelta(days=6)).isoformat()),
+        inicio=str(feito.get("inicio") or hoje.replace(day=1).isoformat()),
         fim=str(feito.get("fim") or hoje.isoformat()),
         tipo=str(feito.get("tipo") or "todos"),
         gerado_em=texto_fortaleza(feito.get("geradoEm")),

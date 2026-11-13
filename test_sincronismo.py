@@ -268,6 +268,8 @@ class Sincronismo(unittest.TestCase):
             self.assertEqual(sync_sgf.periodo_consulta("2026-10-01", "2026-10-31"), ("2026-10-01", "2026-10-31"))
         finally:
             sync_sgf.janela_financeira = original
+        self.assertIn("inicioEl.value = vigente.slice(0, 8) + '01'", sync_sgf.HTML)
+        self.assertNotIn("coberturaInicio <= vigente", sync_sgf.HTML)
         self.assertIn("fimDoGrafico", sync_sgf.HTML)
         self.assertIn("cerca de seis meses atrás", sync_sgf.HTML)
         self.assertIn("Sistemas de Gestão Financeira", sync_sgf.HTML)

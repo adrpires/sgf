@@ -822,7 +822,7 @@ const fimEl = document.getElementById('fim');
 const vigente = hojeFortaleza();
 inicioEl.max = vigente;
 fimEl.max = vigente;
-inicioEl.value = (coberturaInicio && coberturaInicio <= vigente) ? coberturaInicio : vigente.slice(0, 8) + '01';
+inicioEl.value = vigente.slice(0, 8) + '01';
 fimEl.value = vigente;
 function limitarAoVigente() {
   if (fimEl.value > vigente) fimEl.value = vigente;
