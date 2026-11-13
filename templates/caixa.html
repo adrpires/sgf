@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block titulo %}Movimento de caixa · SGF{% endblock %}
+{% block titulo_pagina %}Movimento de caixa{% endblock %}
+{% block corpo %}
+<main>
+  <p>Consulta o movimento do caixa balcão no SGF, separado por loja. O período máximo é de 31 dias.</p>
+  {% if erro %}<div class="erro">{{ erro }}</div>{% endif %}
+  {% if aviso %}<div class="aviso">{{ aviso }}</div>{% endif %}
+  {% if consultando %}<div class="aviso" id="caixaAviso">Consultando o movimento de caixa no SGF. A tela atualiza sozinha.</div>{% endif %}
+  <form class="card" method="post">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label for="inicio">Data inicial</label>
+    <input id="inicio" name="inicio" type="date" required value="{{ inicio }}">
+    <label for="fim">Data final</label>
+    <input id="fim" name="fim" type="date" required value="{{ fim }}">
+    <label>Movimento</label>
+    <div class="opcoes">
+      <label><input type="radio" name="tipo" value="todos" {{ "checked" if tipo == "todos" else "" }}> Todos</label>
+      <label><input type="radio" name="tipo" value="entradas" {{ "checked" if tipo == "entradas" else "" }}> Entradas</label>
+      <label><input type="radio" name="tipo" value="saidas" {{ "checked" if tipo == "saidas" else "" }}> Saídas</label>
+    </div>
+    <button type="submit">Consultar no SGF</button>
+  </form>
+  {% if gerado_em %}<p>Última consulta concluída: {{ gerado_em }}</p>{% endif %}
+  {% for grupo in grupos %}
+  <section class="card" style="margin-top:16px">
+    <h2>{{ grupo.nome }}</h2>
+    <p>Entradas {{ moeda_br(grupo.entradas) }} · Saídas {{ moeda_br(grupo.saidas) }}</p>
+    <table>
+      <thead>
+        <tr><th>Data</th><th>Hora</th><th>Histórico</th><th>Tipo</th><th>Moeda</th><th>Operador</th><th>Observação</th><th>Valor</th></tr>
+      </thead>
+      <tbody>
+        {% for item in grupo.itens %}
+        <tr>
+          <td>{{ item.data[8:10] }}/{{ item.data[5:7] }}/{{ item.data[0:4] }}</td>
+          <td>{{ item.hora }}</td>
+          <td>{{ item.historico }}</td>
+          <td>{{ "Entrada" if item.tipo == "entrada" else "Saída" if item.tipo == "saida" else item.tipo }}</td>
+          <td>{{ item.moeda }}</td>
+          <td>{{ item.operador }}</td>
+          <td>{{ item.obs }}</td>
+          <td>{{ moeda_br(item.valor or 0) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endfor %}
+  {% if gerado_em and not grupos and not consultando %}<p>Nenhum movimento de caixa neste recorte.</p>{% endif %}
+</main>
+{% if consultando %}
+<script>
+(function(){
+  var id = {{ pedido_id|tojson }};
+  function olhar(){
+    fetch('/caixa/estado').then(function(resposta){ return resposta.json(); }).then(function(estado){
+      if (estado.feitoId === id) location.reload();
+      else setTimeout(olhar, 2000);
+    }).catch(function(){ setTimeout(olhar, 3000); });
+  }
+  setTimeout(olhar, 2000);
+})();
+</script>
+{% endif %}
+{% endblock %}

@@ -183,6 +183,72 @@ def iso_curto(token):
     return f"20{ano}-{mes}-{dia}"
 
 
+DATA_CAIXA = re.compile(r"^\d{2}/\d{2}/\d{4}$")
+HORA_CAIXA = re.compile(r"^\d{2}:\d{2}:\d{2}$")
+
+
+def iso_caixa(token):
+    if not token or not DATA_CAIXA.fullmatch(token):
+        return None
+    dia, mes, ano = token.split("/")
+    return f"{ano}-{mes}-{dia}"
+
+
+def colunas_caixa(linha):
+    colunas = [parte.strip() for parte in linha.split("\t")]
+    while colunas and not colunas[0]:
+        colunas.pop(0)
+    while colunas and not colunas[-1]:
+        colunas.pop()
+    return colunas
+
+
+def parse_caixa(texto):
+    filial = ""
+    filial_nome = ""
+    historico = ""
+    movimentos = []
+    for bruta in texto.splitlines():
+        linha = bruta.replace("\xa0", " ").strip()
+        if not linha or linha.startswith("Página") or linha.startswith("Pagina") or linha.startswith("GRUPO"):
+            continue
+        if linha.startswith("Total"):
+            continue
+        if linha.startswith("Filial:"):
+            colunas = colunas_caixa(linha)
+            filial = colunas[1] if len(colunas) > 1 else ""
+            filial_nome = " ".join(colunas[2:]).strip()
+            historico = ""
+            continue
+        if linha.startswith("Histórico:") or linha.startswith("Historico:"):
+            colunas = colunas_caixa(linha)
+            historico = " ".join(colunas[2:]).strip() if len(colunas) > 2 else ""
+            continue
+        if linha.startswith("Observação:") or linha.startswith("Observacao:"):
+            if movimentos:
+                movimentos[-1]["obs"] = re.sub(r"\s+", " ", linha.split(":", 1)[-1]).strip()
+            continue
+        colunas = colunas_caixa(linha)
+        if len(colunas) < 6 or not iso_caixa(colunas[0]) or not HORA_CAIXA.fullmatch(colunas[1]):
+            continue
+        tipo = colunas[3].upper()
+        movimentos.append(
+            {
+                "filial": filial,
+                "filialNome": filial_nome,
+                "historico": historico,
+                "data": iso_caixa(colunas[0]),
+                "hora": colunas[1],
+                "valor": dinheiro(colunas[2]),
+                "tipo": "saida" if tipo == "S" else "entrada" if tipo == "E" else tipo,
+                "moeda": colunas[4],
+                "operador": " ".join(colunas[5:]).strip(),
+                "obs": "",
+            }
+        )
+    return movimentos
+
+
 def parse_relatorio(texto):
     fornecedor = ""
     titulos = []
@@ -527,6 +593,37 @@ class Sessao:
         popup.close()
         return parse_relatorio(texto)
 
+    def consultar_caixa(self, inicio, fim, tipo="todos"):
+        ini = datetime.strptime(inicio, "%Y-%m-%d")
+        final = datetime.strptime(fim, "%Y-%m-%d")
+        if final < ini or (final - ini).days > 31:
+            raise ValueError("periodo invalido")
+        selecao = {"entradas": "selecao1_0", "saidas": "selecao1_1"}.get(tipo, "selecao1_2")
+        self.page.goto(self.base + "/Rel_0047.pod", wait_until="domcontentloaded", timeout=40000)
+        self.page.wait_for_selector("#runReport", timeout=20000)
+        self.page.evaluate(
+            """([ini, fim, selecao]) => {
+                document.getElementById(selecao).checked = true;
+                document.getElementById('selecao2_0').checked = true;
+                document.getElementById('dat_abeini').value = ini;
+                document.getElementById('dat_abefim').value = fim;
+                document.getElementById('agrup_fil_2').checked = true;
+                document.getElementById('saidaRelatorio3').checked = true;
+            }""",
+            [ini.strftime("%d/%m/%Y"), final.strftime("%d/%m/%Y"), selecao],
+        )
+        with self.page.expect_popup(timeout=150000) as espera:
+            self.page.click("#runReport")
+        popup = espera.value
+        popup.wait_for_load_state("domcontentloaded", timeout=150000)
+        popup.wait_for_function(
+            "() => document.body && (document.body.innerText.includes('Movimentos Caixa') || document.body.innerText.includes('Total Geral'))",
+            timeout=150000,
+        )
+        texto = popup.evaluate("() => { const t = document.querySelector('table'); return t ? t.innerText : ''; }")
+        popup.close()
+        return parse_caixa(texto)
+
 
 def periodo_consulta(inicio, fim):
     padrao_inicio, padrao_fim = janela_financeira()
@@ -585,6 +682,60 @@ def atender_relatorio(sessao, ultimo_id):
     return pedido_id
 
 
+def ler_caixa():
+    return ler_json(controle_dir() / "caixa.json")
+
+
+def atender_caixa(sessao, ultimo_id):
+    pedido = ler_caixa()
+    pedido_id = str(pedido.get("id") or "")
+    if not pedido_id or pedido_id == ultimo_id:
+        return ultimo_id
+    movimentos = []
+    ok = False
+    try:
+        user, password = credenciais()
+        sessao.garantir(user, password)
+        movimentos = sessao.consultar_caixa(
+            str(pedido.get("inicio") or ""),
+            str(pedido.get("fim") or ""),
+            str(pedido.get("tipo") or "todos"),
+        )
+        ok = True
+        print(f"caixa {pedido.get('inicio')} {pedido.get('fim')} movimentos={len(movimentos)}")
+    except Exception as exc:
+        print("falha caixa", type(exc).__name__)
+        sessao.fechar()
+    anterior = ler_json(controle_dir() / "caixa-feito.json")
+    if not ok and anterior.get("ok"):
+        gravar_json(
+            controle_dir() / "caixa-feito.json",
+            {
+                "id": pedido_id,
+                "ok": False,
+                "inicio": anterior.get("inicio") or "",
+                "fim": anterior.get("fim") or "",
+                "tipo": anterior.get("tipo") or "todos",
+                "geradoEm": anterior.get("geradoEm") or "",
+                "movimentos": anterior.get("movimentos") or [],
+            },
+        )
+    else:
+        gravar_json(
+            controle_dir() / "caixa-feito.json",
+            {
+                "id": pedido_id,
+                "ok": ok,
+                "inicio": str(pedido.get("inicio") or ""),
+                "fim": str(pedido.get("fim") or ""),
+                "tipo": str(pedido.get("tipo") or "todos"),
+                "geradoEm": agora_fortaleza() if ok else "",
+                "movimentos": movimentos,
+            },
+        )
+    return pedido_id
+
+
 def executar_ciclo(sessao, base, inicio="", fim=""):
     try:
         user, password = credenciais()
@@ -599,6 +750,7 @@ def executar_ciclo(sessao, base, inicio="", fim=""):
 def servir_sob_demanda(sessao, base):
     feito = ler_json(controle_dir() / "feito.json")
     ultimo_id = str(feito.get("id") or "")
+    ultimo_caixa = str(ler_json(controle_dir() / "caixa-feito.json").get("id") or "")
     while True:
         pedido = ler_pedido()
         pedido_id = str(pedido.get("id") or "")
@@ -618,6 +770,7 @@ def servir_sob_demanda(sessao, base):
             atualizar_estado(
                 {"emAndamento": False, "pausado": True, "intervaloMinutos": 0, "proximoEm": ""}
             )
+        ultimo_caixa = atender_caixa(sessao, ultimo_caixa)
         time.sleep(0.4)
 
 
@@ -625,10 +778,12 @@ def servir_agenda(sessao, base, padrao):
     feito = ler_json(controle_dir() / "feito.json")
     ultimo_id = str(feito.get("id") or "")
     ultimo_relatorio = ""
+    ultimo_caixa = str(ler_json(controle_dir() / "caixa-feito.json").get("id") or "")
     ultimo_fim = destino().stat().st_mtime if painel_valido() else 0.0
     if ultimo_fim:
         print("painel existente; proxima consulta segue a agenda")
     while True:
+        ultimo_caixa = atender_caixa(sessao, ultimo_caixa)
         ultimo_relatorio = atender_relatorio(sessao, ultimo_relatorio)
         ultimo_id, ultimo_fim, _motivo = passo_agenda(sessao, base, padrao, ultimo_id, ultimo_fim)
         time.sleep(0.4)

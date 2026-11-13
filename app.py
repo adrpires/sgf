@@ -260,6 +260,7 @@ def montar_menu(usuario, ativo=""):
 
     links = [
         link("/", "Dashboard"),
+        link("/caixa", "Movimento de caixa"),
         link("/lancamentos", "Relatório de entradas e despesas manual"),
     ]
     if usuario["admin"]:
@@ -978,6 +979,7 @@ def painel():
             if usuario["admin"]
             else ""
         )
+        + '<a style="color:#fff" href="/caixa">Movimento de caixa</a>'
         + '<a style="color:#fff" href="/senha">Senha</a>'
         + '<form method="post" action="/sair" style="margin:0">'
         + f'<input type="hidden" name="csrf" value="{html.escape(csrf)}">'
@@ -1310,6 +1312,137 @@ def usuario_editar_post(usuario_id):
     salvar_lojas(alvo["id"], finais)
     session["aviso"] = "Usuário atualizado."
     return redirect(f"/usuarios/{alvo['id']}")
+
+
+def filtrar_caixa(movimentos, permitidas):
+    if acesso_completo(permitidas):
+        return [item for item in movimentos if isinstance(item, dict)]
+    return [
+        item
+        for item in movimentos
+        if isinstance(item, dict) and codigo_origem(item.get("filial")) in permitidas
+    ]
+
+
+def agrupar_caixa(movimentos):
+    grupos = []
+    indice = {}
+    for item in movimentos:
+        codigo = codigo_origem(item.get("filial"))
+        if codigo not in indice:
+            indice[codigo] = {
+                "codigo": codigo,
+                "nome": str(item.get("filialNome") or "").strip() or nome_origem(codigo),
+                "itens": [],
+                "entradas": 0.0,
+                "saidas": 0.0,
+            }
+            grupos.append(indice[codigo])
+        grupo = indice[codigo]
+        valor = float(item.get("valor") or 0)
+        if item.get("tipo") == "entrada":
+            grupo["entradas"] = round(grupo["entradas"] + valor, 2)
+        elif item.get("tipo") == "saida":
+            grupo["saidas"] = round(grupo["saidas"] + valor, 2)
+        grupo["itens"].append(item)
+    return grupos
+
+
+def periodo_caixa(inicio, fim):
+    try:
+        ini = datetime.strptime(str(inicio or ""), "%Y-%m-%d").date()
+        final = datetime.strptime(str(fim or ""), "%Y-%m-%d").date()
+    except ValueError:
+        return "", "", "Informe a data inicial e a data final."
+    if final < ini:
+        return "", "", "A data final precisa ser igual ou posterior à inicial."
+    if (final - ini).days > 31:
+        return "", "", "O movimento de caixa aceita no máximo 31 dias por consulta."
+    return ini.isoformat(), final.isoformat(), ""
+
+
+def ler_caixa_feito():
+    dados = ler_json(CONTROLE / "caixa-feito.json")
+    return dados if isinstance(dados, dict) else {}
+
+
+@app.get("/caixa")
+def caixa_form():
+    usuario, resposta = exigir_login()
+    if resposta:
+        return resposta
+    pedido = ler_json(CONTROLE / "caixa.json")
+    feito = ler_caixa_feito()
+    pedido_id = str(pedido.get("id") or "")
+    consultando = bool(pedido_id) and pedido_id != str(feito.get("id") or "")
+    movimentos = filtrar_caixa(feito.get("movimentos") or [], acesso_lojas(usuario))
+    hoje = datetime.now(FORTALEZA).date()
+    return render_template(
+        "caixa.html",
+        erro="" if feito.get("ok", True) or consultando or not pedido_id else "A consulta no SGF não concluiu. A tabela continua com o último movimento obtido.",
+        aviso=session.pop("aviso", ""),
+        csrf=garantir_csrf(),
+        inicio=str(feito.get("inicio") or (hoje - timedelta(days=6)).isoformat()),
+        fim=str(feito.get("fim") or hoje.isoformat()),
+        tipo=str(feito.get("tipo") or "todos"),
+        gerado_em=texto_fortaleza(feito.get("geradoEm")),
+        grupos=agrupar_caixa(movimentos),
+        consultando=consultando,
+        pedido_id=pedido_id,
+        moeda_br=moeda_br,
+    )
+
+
+@app.post("/caixa")
+def caixa_post():
+    usuario, resposta = exigir_login()
+    if resposta:
+        return resposta
+    if not csrf_ok():
+        return redirect("/caixa")
+    inicio, fim, erro = periodo_caixa(request.form.get("inicio", ""), request.form.get("fim", ""))
+    tipo = request.form.get("tipo", "todos")
+    if tipo not in {"todos", "entradas", "saidas"}:
+        tipo = "todos"
+    if erro:
+        feito = ler_caixa_feito()
+        movimentos = filtrar_caixa(feito.get("movimentos") or [], acesso_lojas(usuario))
+        return render_template(
+            "caixa.html",
+            erro=erro,
+            aviso="",
+            csrf=garantir_csrf(),
+            inicio=request.form.get("inicio", ""),
+            fim=request.form.get("fim", ""),
+            tipo=tipo,
+            gerado_em=texto_fortaleza(feito.get("geradoEm")),
+            grupos=agrupar_caixa(movimentos),
+            consultando=False,
+            pedido_id="",
+            moeda_br=moeda_br,
+        )
+    gravar_json(
+        CONTROLE / "caixa.json",
+        {"id": secrets.token_hex(8), "inicio": inicio, "fim": fim, "tipo": tipo},
+    )
+    session["aviso"] = "Consulta enviada ao SGF."
+    return redirect("/caixa")
+
+
+@app.get("/caixa/estado")
+def caixa_estado():
+    usuario, resposta = exigir_login()
+    if resposta:
+        return resposta
+    pedido = ler_json(CONTROLE / "caixa.json")
+    feito = ler_caixa_feito()
+    return jsonify(
+        {
+            "pedidoId": str(pedido.get("id") or ""),
+            "feitoId": str(feito.get("id") or ""),
+            "ok": feito.get("ok"),
+        }
+    )
 
 
 @app.get("/consulta")

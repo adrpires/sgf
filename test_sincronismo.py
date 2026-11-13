@@ -502,6 +502,92 @@ class Sincronismo(unittest.TestCase):
         self.assertEqual(sync_sgf.deve_sincronizar(agora, 0, 30, False, "", ""), "relogio")
         self.assertEqual(sync_sgf.deve_sincronizar(agora, agora, 30, False, "abc", "abc"), "")
 
+    def test_parse_caixa_separa_loja_historico_e_tipo(self):
+        texto = (
+            "Filial:\t2\tLOJA CENTRO\t\n"
+            "Histórico:\t1\tSANGRIA\t\n"
+            "\t12/11/2026\t14:18:11\t100,00\tS\tDINHEIRO\tANA\t\n"
+            "\tObservação:\tMONTANTE\t\n"
+            "\t12/11/2026\t09:00:00\t50,00\tE\tDINHEIRO\tANA\t\n"
+            "\tObservação:\tSUPRIMENTO\t\n"
+            "Total Histórico:\t-50,00\t\n"
+            "Página 1 de\t2\t\n"
+            "Filial:\t3\tLOJA NORTE\t\n"
+            "Histórico:\t5\tFECHAMENTO\t\n"
+            "\t13/11/2026\t18:00:00\t10,50\tS\tCARTAO\tBIA\t\n"
+            "\tObservação:\t\t\n"
+        )
+        movimentos = sync_sgf.parse_caixa(texto)
+        self.assertEqual(len(movimentos), 3)
+        self.assertEqual(movimentos[0]["filial"], "2")
+        self.assertEqual(movimentos[0]["filialNome"], "LOJA CENTRO")
+        self.assertEqual(movimentos[0]["historico"], "SANGRIA")
+        self.assertEqual(movimentos[0]["tipo"], "saida")
+        self.assertEqual(movimentos[0]["obs"], "MONTANTE")
+        self.assertEqual(movimentos[0]["valor"], 100.0)
+        self.assertEqual(movimentos[1]["tipo"], "entrada")
+        self.assertEqual(movimentos[2]["filialNome"], "LOJA NORTE")
+        self.assertEqual(movimentos[2]["obs"], "")
+
+    def test_movimento_de_caixa_entra_no_menu_e_enfileira(self):
+        cliente, resposta = self.entrar()
+        self.assertIn("Movimento de caixa", resposta.get_data(as_text=True))
+        pagina = cliente.get("/caixa")
+        html = pagina.get_data(as_text=True)
+        self.assertEqual(pagina.status_code, 200)
+        self.assertIn("Consultar no SGF", html)
+        token = csrf_de(html)
+        pedido = cliente.post(
+            "/caixa",
+            data={"csrf": token, "inicio": "2026-11-01", "fim": "2026-11-07", "tipo": "saidas"},
+            follow_redirects=True,
+        )
+        self.assertIn("Consulta enviada ao SGF.", pedido.get_data(as_text=True))
+        gravado = json.loads((CONTROLE / "caixa.json").read_text(encoding="utf-8"))
+        self.assertEqual(gravado["inicio"], "2026-11-01")
+        self.assertEqual(gravado["fim"], "2026-11-07")
+        self.assertEqual(gravado["tipo"], "saidas")
+        self.assertIn("Consultando o movimento de caixa", pedido.get_data(as_text=True))
+        longo = cliente.post(
+            "/caixa",
+            data={"csrf": csrf_de(pedido.get_data(as_text=True)), "inicio": "2026-10-01", "fim": "2026-11-07", "tipo": "todos"},
+        )
+        self.assertIn("no máximo 31 dias", longo.get_data(as_text=True))
+
+    def test_movimento_de_caixa_esconde_loja_nao_marcada(self):
+        (CONTROLE / "caixa-feito.json").write_text(
+            json.dumps(
+                {
+                    "id": "feito",
+                    "ok": True,
+                    "inicio": "2026-11-12",
+                    "fim": "2026-11-13",
+                    "tipo": "todos",
+                    "geradoEm": "2026-11-13T10:00:00-03:00",
+                    "movimentos": [
+                        {"filial": "2", "filialNome": "LOJA CENTRO", "historico": "SANGRIA", "data": "2026-11-12", "hora": "14:18:11", "valor": 100, "tipo": "saida", "moeda": "DINHEIRO", "operador": "ANA", "obs": ""},
+                        {"filial": "3", "filialNome": "LOJA NORTE", "historico": "SANGRIA", "data": "2026-11-12", "hora": "15:00:00", "valor": 40, "tipo": "saida", "moeda": "DINHEIRO", "operador": "BIA", "obs": ""},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        with aplicacao.conectar() as conn:
+            usuario = conn.execute("SELECT id FROM usuarios WHERE login = ?", ("consulta",)).fetchone()
+            conn.execute("DELETE FROM usuario_lojas WHERE usuario_id = ?", (usuario["id"],))
+            conn.execute(
+                "INSERT INTO usuario_lojas (usuario_id, origem) VALUES (?, ?)",
+                (usuario["id"], "3"),
+            )
+        try:
+            cliente, _resposta = self.entrar("consulta")
+            html = cliente.get("/caixa").get_data(as_text=True)
+            self.assertIn("LOJA NORTE", html)
+            self.assertNotIn("LOJA CENTRO", html)
+        finally:
+            with aplicacao.conectar() as conn:
+                conn.execute("DELETE FROM usuario_lojas WHERE usuario_id = ?", (usuario["id"],))
+
 
 if __name__ == "__main__":
     unittest.main()
