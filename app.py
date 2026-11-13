@@ -278,6 +278,7 @@ def montar_menu(usuario, ativo=""):
 
     links = [
         link("/", "Dashboard"),
+        link("/detalhes", "Detalhes"),
         link("/caixa", "Movimento de caixa"),
         link("/lancamentos", "Relatório de entradas e despesas manual"),
     ]
@@ -1074,6 +1075,15 @@ def sair():
 
 @app.get("/")
 def painel():
+    return responder_painel("dashboard")
+
+
+@app.get("/detalhes")
+def detalhes():
+    return responder_painel("detalhes")
+
+
+def responder_painel(pagina):
     usuario, resposta = exigir_login()
     if resposta:
         return resposta
@@ -1100,6 +1110,7 @@ def painel():
             if usuario["admin"]
             else ""
         )
+        + '<a style="color:#fff" href="/detalhes">Detalhes</a>'
         + '<a style="color:#fff" href="/caixa">Movimento de caixa</a>'
         + '<a style="color:#fff" href="/senha">Senha</a>'
         + '<form method="post" action="/sair" style="margin:0">'
@@ -1115,6 +1126,7 @@ def painel():
     conteudo = conteudo.replace('"__CSRF__"', json.dumps(csrf), 1)
     conteudo = conteudo.replace("__TEMA__", html.escape(tema_atual()), 1)
     conteudo = conteudo.replace("__MENU__", montar_menu(usuario, request.path), 1)
+    conteudo = conteudo.replace("__PAGINA__", pagina, 1)
     if not tem_menu:
         if "<body>" in conteudo:
             conteudo = conteudo.replace("<body>", "<body>" + barra, 1)

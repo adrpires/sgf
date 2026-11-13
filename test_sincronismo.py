@@ -708,6 +708,21 @@ class Sincronismo(unittest.TestCase):
         self.assertIn('"nome": "Energia"', painel)
         self.assertNotIn("__TIPOS_DESPESA__", painel)
         self.assertNotIn("__MAPA_TIPO__", painel)
+        self.assertIn('data-pagina="dashboard"', painel)
+        self.assertIn('id="resumoBars"', painel)
+        self.assertIn('id="graficoEntradas"', painel)
+        self.assertIn('id="tiposBars"', painel)
+        self.assertIn('id="concLojaBars"', painel)
+        self.assertIn('id="graficoConciliacaoTipo"', painel)
+        self.assertIn('id="graficoSaldos"', painel)
+        self.assertIn('main[data-pagina="dashboard"] .so-detalhe { display:none; }', painel)
+        detalhe = cliente.get("/detalhes")
+        self.assertEqual(detalhe.status_code, 200)
+        pagina = detalhe.get_data(as_text=True)
+        self.assertIn('data-pagina="detalhes"', pagina)
+        self.assertIn(">Detalhes<", pagina)
+        self.assertIn('id="sessoesSaidas"', pagina)
+        self.assertIn('id="contas"', pagina)
 
 
 if __name__ == "__main__":
