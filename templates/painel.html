@@ -257,6 +257,15 @@ const METAS = __METAS__;
 const METAS_ORIGEM = __METAS_ORIGEM__;
 const moeda = new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'});
 const titulosEmbutidos = DADOS.titulos || [];
+let titulosConsulta = null;
+let linhasConsulta = null;
+let pedidoRecorte = 0;
+function fonteLinhas() {
+  return linhasConsulta || DADOS.linhas || [];
+}
+function fonteTitulos() {
+  return titulosConsulta || titulosEmbutidos;
+}
 const coberturaInicio = DADOS.titulosInicio || '';
 const coberturaFim = DADOS.titulosFim || '';
 const meses = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
@@ -284,7 +293,7 @@ function agrupar(lista) {
   return Array.from(mapa.values());
 }
 function linhasDoPeriodo(tipo, inicio, fim) {
-  return (DADOS.linhas || []).filter(item => item.tipo === tipo && !item.atipico && dentro(item.data, inicio, fim));
+  return fonteLinhas().filter(item => item.tipo === tipo && !item.atipico && dentro(item.data, inicio, fim));
 }
 function diaIso(data) {
   return data.getFullYear() + '-' + String(data.getMonth() + 1).padStart(2, '0') + '-' + String(data.getDate()).padStart(2, '0');
@@ -297,7 +306,7 @@ function serieComparativo(inicio, fim) {
     const limite = new Date(fim.slice(0, 7) + '-01T12:00:00');
     while (cursor <= limite) {
       const chave = chaveMes(cursor);
-      const doPeriodo = (DADOS.linhas || []).filter(item => !item.atipico && String(item.data || '').startsWith(chave) && dentro(item.data, inicio, fim));
+      const doPeriodo = fonteLinhas().filter(item => !item.atipico && String(item.data || '').startsWith(chave) && dentro(item.data, inicio, fim));
       serie.push({
         label: meses[cursor.getMonth()] + '/' + String(cursor.getFullYear()).slice(2),
         pagar: soma(doPeriodo.filter(item => item.tipo === 'pagar'), 'valor'),
@@ -312,7 +321,7 @@ function serieComparativo(inicio, fim) {
   const limite = new Date(fim + 'T12:00:00');
   while (cursor <= limite) {
     const chave = diaIso(cursor);
-    const doPeriodo = (DADOS.linhas || []).filter(item => !item.atipico && item.data === chave);
+    const doPeriodo = fonteLinhas().filter(item => !item.atipico && item.data === chave);
     serie.push({
       label: String(cursor.getDate()).padStart(2, '0') + '/' + String(cursor.getMonth() + 1).padStart(2, '0'),
       pagar: soma(doPeriodo.filter(item => item.tipo === 'pagar'), 'valor'),
@@ -415,7 +424,7 @@ function notaOrigem(lista) {
   const nota = document.getElementById('origemNota');
   if (!nota) return;
   const codigos = new Set(lista.map(item => codigoOrigem(item.filial)));
-  const todos = new Set(titulosEmbutidos.map(item => codigoOrigem(item.filial)));
+  const todos = new Set(Array.isArray(DADOS.filiaisSync) ? DADOS.filiaisSync.map(codigoOrigem) : titulosEmbutidos.map(item => codigoOrigem(item.filial)));
   if (!todos.has('1')) {
     nota.textContent = 'A matriz é a filial 1 no contas a pagar. Esse código não veio no último sincronismo, por isso o gráfico não tem a coluna da matriz.';
     return;
@@ -563,6 +572,13 @@ function textoPct(valor) {
   const arred = Math.round(valor * 10) / 10;
   return (Number.isInteger(arred) ? String(arred) : arred.toFixed(1).replace('.', ',')) + '%';
 }
+function realizadoMeta(codigo, chave) {
+  if (Array.isArray(DADOS.porOrigemMes)) {
+    const achado = DADOS.porOrigemMes.find(item => codigoOrigem(item.origem) === codigoOrigem(codigo) && item.mes === chave);
+    return achado ? Number(achado.valor) || 0 : 0;
+  }
+  return soma(titulosEmbutidos.filter(titulo => codigoOrigem(titulo.filial) === codigoOrigem(codigo) && String(titulo.vencimento || '').startsWith(chave)), 'valor');
+}
 function renderGraficoMetas(fim) {
   const caixa = document.getElementById('metaChart');
   const avisos = document.getElementById('avisosMeta');
@@ -589,7 +605,7 @@ function renderGraficoMetas(fim) {
     const meta = Number(item.valor);
     const pontos = serie.map(mes => {
       if (!mesCoberto(mes.chave)) return {chave: mes.chave, label: mes.label, nulo: true};
-      const realizado = soma(titulosEmbutidos.filter(titulo => codigoOrigem(titulo.filial) === codigoOrigem(codigo) && String(titulo.vencimento || '').startsWith(mes.chave)), 'valor');
+      const realizado = realizadoMeta(codigo, mes.chave);
       return {chave: mes.chave, label: mes.label, nulo: false, pct: (realizado / meta) * 100, realizado: realizado};
     });
     const atual = pontos.find(ponto => ponto.chave === hoje && !ponto.nulo) || null;
@@ -672,7 +688,7 @@ function renderAlertas(inicio, fim) {
   const caixa = document.getElementById('alertas');
   if (!caixa) return;
   caixa.innerHTML = (METAS || []).map(meta => {
-    const total = soma((DADOS.linhas || []).filter(item => !item.atipico && item.tipo === meta.tipo && item.descricao === meta.categoria && dentro(item.data, inicio, fim)), 'valor');
+    const total = soma(fonteLinhas().filter(item => !item.atipico && item.tipo === meta.tipo && item.descricao === meta.categoria && dentro(item.data, inicio, fim)), 'valor');
     if (total < Number(meta.valor)) return '';
     const receita = meta.tipo === 'receber';
     return '<div class="alerta ' + (receita ? 'alerta-verde' : 'alerta-vermelho') + '">'
@@ -685,7 +701,7 @@ function render() {
   const inicio = document.getElementById('inicio').value;
   const fim = document.getElementById('fim').value;
   renderAlertas(inicio, fim);
-  const titulos = titulosEmbutidos;
+  const titulos = fonteTitulos();
   const entradas = linhasDoPeriodo('receber', inicio, fim);
   const soPendentes = document.getElementById('soPendentes');
   if (soPendentes && !soPendentes.dataset.pronto) {
@@ -753,6 +769,7 @@ function render() {
   let nota = 'As entradas vêm da classificação financeira do SGF: cada movimento com tipo receita entra na soma do dia, sem divisão por loja.';
   nota += ' As saídas vêm do contas a pagar, do primeiro dia de cerca de seis meses atrás até a data de hoje, e incluem as despesas lançadas manualmente. As entradas manuais entram na mesma soma, com a loja no nome. Cada filial, a matriz e cada loja em Fornecedores ficam fechadas até serem abertas. Só pendentes esconde o que já foi pago e mantém os meses em aberto.';
   nota += ' Atualizar pede um sincronismo em segundo plano; a tela continua no último sincronismo até ele terminar.';
+  nota += ' A consulta do período lê a base gravada no sincronismo. Ela só muda quando o cursor sai da data ou depois de dois segundos sem digitar.';
   if (coberturaInicio && coberturaFim && (inicio < coberturaInicio || fim > coberturaFim)) {
     nota += ' O último sincronismo cobre ' + br(coberturaInicio) + ' a ' + br(coberturaFim) + '.';
   }
@@ -829,10 +846,39 @@ function limitarAoVigente() {
   if (inicioEl.value > vigente) inicioEl.value = vigente;
   if (inicioEl.value && fimEl.value && inicioEl.value > fimEl.value) inicioEl.value = fimEl.value;
 }
-document.getElementById('buscar').onclick = function() { limitarAoVigente(); render(); };
-inicioEl.onchange = function() { limitarAoVigente(); render(); };
-fimEl.onchange = function() { limitarAoVigente(); render(); };
-render();
+function periodoPronto() {
+  return /^\d{4}-\d{2}-\d{2}$/.test(inicioEl.value) && /^\d{4}-\d{2}-\d{2}$/.test(fimEl.value) && inicioEl.value <= fimEl.value;
+}
+let timerPeriodo = 0;
+function aplicarPeriodo() {
+  clearTimeout(timerPeriodo);
+  limitarAoVigente();
+  if (!periodoPronto()) return;
+  const id = ++pedidoRecorte;
+  const url = '/painel/recorte?inicio=' + encodeURIComponent(inicioEl.value) + '&fim=' + encodeURIComponent(fimEl.value);
+  fetch(url).then(function(resposta){ return resposta.json(); }).then(function(dados){
+    if (id !== pedidoRecorte) return;
+    if (!dados || !dados.ok) { render(); return; }
+    titulosConsulta = dados.titulos || [];
+    linhasConsulta = dados.linhas || [];
+    DADOS.porOrigemMes = dados.porOrigemMes || [];
+    DADOS.filiaisSync = dados.filiais || [];
+    if (Array.isArray(dados.contas)) DADOS.contas = dados.contas;
+    render();
+  }).catch(function(){ if (id === pedidoRecorte) render(); });
+}
+function agendarPeriodo() {
+  clearTimeout(timerPeriodo);
+  timerPeriodo = setTimeout(aplicarPeriodo, 2000);
+}
+document.getElementById('buscar').onclick = function() { aplicarPeriodo(); };
+inicioEl.addEventListener('input', agendarPeriodo);
+fimEl.addEventListener('input', agendarPeriodo);
+inicioEl.addEventListener('change', agendarPeriodo);
+fimEl.addEventListener('change', agendarPeriodo);
+inicioEl.addEventListener('blur', aplicarPeriodo);
+fimEl.addEventListener('blur', aplicarPeriodo);
+aplicarPeriodo();
 </script>
 </body>
 </html>

@@ -1,8 +1,11 @@
 import argparse
+import sqlite3
 import json
 import os
 import re
 import time
+
+import sgf_base
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -316,6 +319,10 @@ def gravar(payload, filial):
     temporario = arquivo.with_name(arquivo.name + ".tmp")
     temporario.write_text(html, encoding="utf-8")
     os.replace(temporario, arquivo)
+    try:
+        sgf_base.salvar(payload)
+    except sqlite3.Error as exc:
+        print("falha base", type(exc).__name__)
     print(f"painel {arquivo} linhas={len(payload['linhas'])} contas={len(payload['contas'])}")
 
 

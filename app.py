@@ -15,6 +15,8 @@ from flask import Flask, jsonify, redirect, render_template, request, session
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
+import sgf_base
+
 PAINEL = Path(os.environ.get("GEFIN_PAINEL", Path(__file__).with_name("painel_sgf.html")))
 DB = Path(os.environ.get("GEFIN_DB", Path(__file__).with_name("usuarios.db")))
 CONTROLE = Path(os.environ.get("GEFIN_CONTROLE", Path(__file__).with_name("controle")))
@@ -433,7 +435,7 @@ def resumo_sincronismo():
     }
 
 
-def dados_painel():
+def ler_html_painel():
     if not PAINEL.exists():
         return {}
     texto = PAINEL.read_text(encoding="utf-8")
@@ -446,6 +448,51 @@ def dados_painel():
     except json.JSONDecodeError:
         return {}
     return dados if isinstance(dados, dict) else {}
+
+
+def dados_painel():
+    html = ler_html_painel()
+    base = sgf_base.ler()
+    html_quando = str((html or {}).get("geradoEm") or "")
+    base_quando = str((base or {}).get("geradoEm") or "")
+    if html and (not base or html_quando > base_quando):
+        try:
+            sgf_base.salvar(html)
+        except sqlite3.Error:
+            return html
+        return html
+    return base or html or {}
+
+
+def meses_ate(fim, quantidade=6):
+    ano, mes, _dia = [int(parte) for parte in str(fim).split("-")]
+    chaves = []
+    for _ in range(quantidade):
+        chaves.append(f"{ano:04d}-{mes:02d}")
+        mes -= 1
+        if mes == 0:
+            mes = 12
+            ano -= 1
+    chaves.reverse()
+    return chaves
+
+
+def realizado_por_origem(titulos, fim):
+    chaves = set(meses_ate(fim))
+    mapa = {}
+    for item in titulos:
+        if not isinstance(item, dict):
+            continue
+        mes = str(item.get("vencimento") or "")[:7]
+        if mes not in chaves:
+            continue
+        origem = codigo_origem(item.get("filial"))
+        chave = (origem, mes)
+        mapa[chave] = round(mapa.get(chave, 0) + float(item.get("valor") or 0), 2)
+    return [
+        {"origem": origem, "mes": mes, "valor": valor}
+        for (origem, mes), valor in sorted(mapa.items(), key=lambda par: (par[0][1], par[0][0]))
+    ]
 
 
 def logo_painel():
@@ -1004,6 +1051,44 @@ def painel():
     else:
         conteudo += script
     return conteudo
+
+
+@app.get("/painel/recorte")
+def painel_recorte():
+    usuario, resposta = exigir_login()
+    if resposta:
+        return resposta
+    inicio = request.args.get("inicio", "")
+    fim = request.args.get("fim", "")
+    periodo = periodo_formulario(inicio, fim)
+    if not periodo or not inicio or not fim:
+        return jsonify({"ok": False, "linhas": [], "titulos": []}), 400
+    visiveis = filtrar_acesso(incorporar_lancamentos(dados_painel()), acesso_lojas(usuario))
+    linhas = []
+    for item in visiveis.get("linhas") or []:
+        if isinstance(item, dict) and periodo[0] <= str(item.get("data") or "") <= periodo[1]:
+            linhas.append(item)
+    titulos = []
+    for item in visiveis.get("titulos") or []:
+        if isinstance(item, dict) and periodo[0] <= str(item.get("vencimento") or "") <= periodo[1]:
+            titulos.append(item)
+    filiais = sorted(
+        {
+            codigo_origem(item.get("filial"))
+            for item in visiveis.get("titulos") or []
+            if isinstance(item, dict) and codigo_origem(item.get("filial"))
+        }
+    )
+    return jsonify(
+        {
+            "ok": True,
+            "linhas": linhas,
+            "titulos": titulos,
+            "contas": visiveis.get("contas") or [],
+            "porOrigemMes": realizado_por_origem(visiveis.get("titulos") or [], periodo[1]),
+            "filiais": filiais,
+        }
+    )
 
 
 @app.post("/atualizar")

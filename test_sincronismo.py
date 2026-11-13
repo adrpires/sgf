@@ -30,6 +30,7 @@ if "playwright" not in sys.modules:
     sys.modules["playwright.sync_api"] = sync_api
 
 import app as aplicacao
+import sgf_base
 import sync_sgf
 from werkzeug.security import generate_password_hash
 
@@ -66,7 +67,7 @@ class Sincronismo(unittest.TestCase):
 
     def setUp(self):
         CONTROLE.mkdir(parents=True, exist_ok=True)
-        for nome in ("pedido.json", "feito.json", "estado.json"):
+        for nome in ("pedido.json", "feito.json", "estado.json", "sgf.db", "sgf.db-wal", "sgf.db-shm"):
             caminho = CONTROLE / nome
             if caminho.exists():
                 caminho.unlink()
@@ -269,7 +270,9 @@ class Sincronismo(unittest.TestCase):
         finally:
             sync_sgf.janela_financeira = original
         self.assertIn("inicioEl.value = vigente.slice(0, 8) + '01'", sync_sgf.HTML)
-        self.assertNotIn("coberturaInicio <= vigente", sync_sgf.HTML)
+        self.assertNotIn("inicioEl.onchange = function() { limitarAoVigente(); render(); }", sync_sgf.HTML)
+        self.assertIn("addEventListener('blur', aplicarPeriodo)", sync_sgf.HTML)
+        self.assertIn("/painel/recorte", sync_sgf.HTML)
         self.assertIn("fimDoGrafico", sync_sgf.HTML)
         self.assertIn("cerca de seis meses atrás", sync_sgf.HTML)
         self.assertIn("Sistemas de Gestão Financeira", sync_sgf.HTML)
@@ -589,6 +592,38 @@ class Sincronismo(unittest.TestCase):
         finally:
             with aplicacao.conectar() as conn:
                 conn.execute("DELETE FROM usuario_lojas WHERE usuario_id = ?", (usuario["id"],))
+
+    def test_sincronismo_grava_na_base_e_o_periodo_le_dela(self):
+        sync_sgf.gravar(
+            {
+                "geradoEm": "2026-11-13T10:00:00-03:00",
+                "inicio": "2026-05-01",
+                "fim": "2026-11-13",
+                "titulosInicio": "2026-05-01",
+                "titulosFim": "2026-11-13",
+                "linhas": [
+                    {"data": "2026-11-02", "descricao": "Receita do mes", "tipo": "receber", "status": "baixado", "valor": 10, "atipico": False},
+                    {"data": "2026-05-02", "descricao": "Receita antiga", "tipo": "receber", "status": "baixado", "valor": 99, "atipico": False},
+                ],
+                "titulos": [
+                    {"fornecedor": "Atual", "documento": "1-1", "filial": "2", "emissao": "2026-11-01", "vencimento": "2026-11-10", "pagamento": "", "valor": 5, "pago": None, "juros": 0, "obs": "", "atipico": False},
+                    {"fornecedor": "Antigo", "documento": "1-2", "filial": "2", "emissao": "2026-05-01", "vencimento": "2026-05-10", "pagamento": "", "valor": 7, "pago": None, "juros": 0, "obs": "", "atipico": False},
+                ],
+                "contas": [{"nome": "Caixa", "saldo": 3}],
+            },
+            "Filial",
+        )
+        guardado = sgf_base.ler()
+        self.assertEqual(guardado["geradoEm"], "2026-11-13T10:00:00-03:00")
+        self.assertEqual(len(guardado["titulos"]), 2)
+        cliente, _resposta = self.entrar()
+        recorte = cliente.get("/painel/recorte?inicio=2026-11-01&fim=2026-11-13")
+        corpo = recorte.get_json()
+        self.assertTrue(corpo["ok"])
+        self.assertEqual([item["descricao"] for item in corpo["linhas"]], ["Receita do mes"])
+        self.assertEqual([item["fornecedor"] for item in corpo["titulos"]], ["Atual"])
+        self.assertEqual(corpo["porOrigemMes"], [{"origem": "2", "mes": "2026-11", "valor": 5.0}])
+        self.assertIn("2", corpo["filiais"])
 
 
 if __name__ == "__main__":
