@@ -722,7 +722,7 @@ def metas_origem_salvas():
 
 def normalizar_tipo(nome):
     nome = " ".join(str(nome or "").split())
-    if not nome or len(nome) > 60:
+    if not nome or len(nome) > 80:
         return ""
     if any(ord(caractere) < 32 or caractere in "<>&" for caractere in nome):
         return ""
@@ -752,12 +752,28 @@ def fornecedores_conhecidos():
     return sorted(nomes, key=lambda texto: texto.casefold())
 
 
+def itens_despesa():
+    salvas = {item["nome"]: item["valor"] for item in listar_tipos_despesa()}
+    nomes = set()
+    for item in dados_painel().get("titulos") or []:
+        if not isinstance(item, dict) or item.get("classe") != "despesa":
+            continue
+        nome = normalizar_tipo(item.get("tipoDespesa") or item.get("fornecedor") or "")
+        if nome:
+            nomes.add(nome)
+    return [
+        {"nome": nome, "texto": decimal_br(salvas[nome]) if nome in salvas else ""}
+        for nome in sorted(nomes, key=str.casefold)
+    ]
+
+
+def metas_despesa_painel():
+    conhecidos = {item["nome"] for item in itens_despesa()}
+    return [item for item in listar_tipos_despesa() if item["nome"] in conhecidos]
+
+
 def extras_metas():
-    return {
-        "tipos": listar_tipos_despesa(),
-        "fornecedores": fornecedores_conhecidos(),
-        "mapa": mapa_fornecedor_tipo(),
-    }
+    return {"despesas": itens_despesa()}
 
 
 def percentual_aviso():
@@ -950,6 +966,8 @@ def incorporar_lancamentos(dados):
                     "obs": "Lançamento manual",
                     "atipico": False,
                     "manual": True,
+                    "classe": "despesa",
+                    "tipoDespesa": item["descricao"],
                 }
             )
     base["linhas"] = linhas
@@ -1093,8 +1111,7 @@ def painel():
         barra += bloco_atualizar(csrf, str(dados_painel().get("geradoEm") or ""))
     conteudo = conteudo.replace("__METAS_ORIGEM__", json.dumps(payload_metas_origem(acesso_lojas(usuario)), ensure_ascii=False), 1)
     conteudo = conteudo.replace("__METAS__", json.dumps(listar_metas(), ensure_ascii=False), 1)
-    conteudo = conteudo.replace("__TIPOS_DESPESA__", json.dumps(listar_tipos_despesa(), ensure_ascii=False), 1)
-    conteudo = conteudo.replace("__MAPA_TIPO__", json.dumps(mapa_fornecedor_tipo(), ensure_ascii=False), 1)
+    conteudo = conteudo.replace("__TIPOS_DESPESA__", json.dumps(metas_despesa_painel(), ensure_ascii=False), 1)
     conteudo = conteudo.replace('"__CSRF__"', json.dumps(csrf), 1)
     conteudo = conteudo.replace("__TEMA__", html.escape(tema_atual()), 1)
     conteudo = conteudo.replace("__MENU__", montar_menu(usuario, request.path), 1)
@@ -1525,11 +1542,11 @@ def caixa_form():
         erro="" if feito.get("ok", True) or consultando or not pedido_id else "A consulta no SGF não concluiu. A tabela continua com o último movimento obtido.",
         aviso=session.pop("aviso", ""),
         csrf=garantir_csrf(),
-        inicio=str(feito.get("inicio") or hoje.replace(day=1).isoformat()),
-        fim=str(feito.get("fim") or hoje.isoformat()),
-        tipo=str(feito.get("tipo") or "todos"),
+        inicio=hoje.replace(day=1).isoformat(),
+        fim=hoje.isoformat(),
+        tipo="todos",
         gerado_em=texto_fortaleza(feito.get("geradoEm")),
-        grupos=agrupar_caixa(movimentos),
+        movimentos=movimentos,
         consultando=consultando,
         pedido_id=pedido_id,
         moeda_br=moeda_br,
@@ -1559,7 +1576,7 @@ def caixa_post():
             fim=request.form.get("fim", ""),
             tipo=tipo,
             gerado_em=texto_fortaleza(feito.get("geradoEm")),
-            grupos=agrupar_caixa(movimentos),
+            movimentos=movimentos,
             consultando=False,
             pedido_id="",
             moeda_br=moeda_br,
@@ -1917,6 +1934,61 @@ def metas_vinculos_post():
             else:
                 conn.execute("DELETE FROM fornecedor_tipo WHERE fornecedor = ?", (fornecedor,))
     session["aviso"] = "Vínculos de despesa salvos."
+    return redirect("/metas")
+
+
+@app.post("/metas/despesas")
+def metas_despesas_post():
+    usuario, resposta = exigir_login()
+    if resposta:
+        return resposta
+    if not usuario["admin"] or not csrf_ok():
+        return redirect("/")
+    conhecidos = {item["nome"] for item in itens_despesa()}
+    nomes = request.form.getlist("nome")
+    valores = request.form.getlist("valor")
+    erro = ""
+    pares = []
+    if len(nomes) != len(valores) or len(nomes) > 2000:
+        erro = "Não foi possível ler as metas de despesa."
+    else:
+        vistos = set()
+        for nome, texto in zip(nomes, valores):
+            nome = normalizar_tipo(nome)
+            if not nome or nome in vistos:
+                continue
+            vistos.add(nome)
+            if nome not in conhecidos:
+                erro = "Despesa desconhecida."
+                break
+            valor, falha = ler_meta_form(texto)
+            if falha:
+                erro = falha
+                break
+            pares.append((nome, valor))
+    if erro:
+        return render_template(
+            "metas.html",
+            erro=erro,
+            aviso="",
+            linhas=linhas_formulario(permitidas=acesso_lojas(usuario)),
+            percentual=texto_percentual(percentual_aviso()),
+            csrf=garantir_csrf(),
+            **extras_metas(),
+        )
+    with conectar() as conn:
+        for nome, valor in pares:
+            if valor is None:
+                conn.execute("DELETE FROM tipos_despesa WHERE nome = ?", (nome,))
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO tipos_despesa (nome, valor) VALUES (?, ?)
+                    ON CONFLICT(nome) DO UPDATE SET valor = excluded.valor
+                    """,
+                    (nome, valor),
+                )
+    session["aviso"] = "Meta de despesa salva."
     return redirect("/metas")
 
 

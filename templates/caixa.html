@@ -2,53 +2,131 @@
 {% block titulo %}Movimento de caixa · SGF{% endblock %}
 {% block titulo_pagina %}Movimento de caixa{% endblock %}
 {% block corpo %}
+<style>
+  .recortes { display:flex; gap:16px; align-items:flex-end; flex-wrap:nowrap; margin-bottom:16px; }
+  .recortes label { display:flex; flex-direction:column; gap:4px; margin:0; width:auto; color:var(--muted); font-size:13px; }
+  .recortes input[type="date"] { width:auto; }
+  .recortes .opcoes { margin:0 0 8px; }
+  .loja { margin-top:12px; }
+  .loja summary { cursor:pointer; font-weight:700; }
+  .loja table tr:nth-child(even) td { background:#e7eef6; }
+  html[data-tema="escuro"] .loja table tr:nth-child(even) td { background:#22344c; }
+  .barras .col span { max-width:96px; text-align:center; font-size:12px; }
+  @media (max-width:800px) {
+    .recortes { flex-wrap:wrap; }
+  }
+</style>
 <main>
-  <p>Consulta o movimento do caixa balcão no SGF, separado por loja. O período máximo é de 31 dias.</p>
+  <p>O gráfico e a lista usam o movimento de caixa já gravado. A data só recorta essa base.</p>
   {% if erro %}<div class="erro">{{ erro }}</div>{% endif %}
   {% if aviso %}<div class="aviso">{{ aviso }}</div>{% endif %}
-  {% if consultando %}<div class="aviso" id="caixaAviso">Consultando o movimento de caixa no SGF. A tela atualiza sozinha.</div>{% endif %}
-  <form class="card" method="post">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label for="inicio">Data inicial</label>
-    <input id="inicio" name="inicio" type="date" required value="{{ inicio }}">
-    <label for="fim">Data final</label>
-    <input id="fim" name="fim" type="date" required value="{{ fim }}">
-    <label>Movimento</label>
+  {% if consultando %}<div class="aviso" id="caixaAviso">O sincronismo está concluindo um movimento de caixa. A tela atualiza sozinha.</div>{% endif %}
+  <div class="card recortes">
+    <label for="inicio">Data inicial <input id="inicio" name="inicio" type="date" required value="{{ inicio }}"></label>
+    <label for="fim">Data final <input id="fim" name="fim" type="date" required value="{{ fim }}"></label>
     <div class="opcoes">
       <label><input type="radio" name="tipo" value="todos" {{ "checked" if tipo == "todos" else "" }}> Todos</label>
       <label><input type="radio" name="tipo" value="entradas" {{ "checked" if tipo == "entradas" else "" }}> Entradas</label>
       <label><input type="radio" name="tipo" value="saidas" {{ "checked" if tipo == "saidas" else "" }}> Saídas</label>
     </div>
-    <button type="submit">Consultar no SGF</button>
-  </form>
-  {% if gerado_em %}<p>Última consulta concluída: {{ gerado_em }}</p>{% endif %}
-  {% for grupo in grupos %}
-  <section class="card" style="margin-top:16px">
-    <h2>{{ grupo.nome }}</h2>
-    <p>Entradas {{ moeda_br(grupo.entradas) }} · Saídas {{ moeda_br(grupo.saidas) }}</p>
-    <table>
-      <thead>
-        <tr><th>Data</th><th>Hora</th><th>Histórico</th><th>Tipo</th><th>Moeda</th><th>Operador</th><th>Observação</th><th>Valor</th></tr>
-      </thead>
-      <tbody>
-        {% for item in grupo.itens %}
-        <tr>
-          <td>{{ item.data[8:10] }}/{{ item.data[5:7] }}/{{ item.data[0:4] }}</td>
-          <td>{{ item.hora }}</td>
-          <td>{{ item.historico }}</td>
-          <td>{{ "Entrada" if item.tipo == "entrada" else "Saída" if item.tipo == "saida" else item.tipo }}</td>
-          <td>{{ item.moeda }}</td>
-          <td>{{ item.operador }}</td>
-          <td>{{ item.obs }}</td>
-          <td>{{ moeda_br(item.valor or 0) }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  </div>
+  <section class="card">
+    <h2>Entradas e saídas por loja</h2>
+    <div class="legenda-manual"><span><i class="ponto entrada"></i>Entrada</span><span><i class="ponto despesa"></i>Saída</span></div>
+    <div class="barras" id="graficoCaixa"></div>
   </section>
-  {% endfor %}
-  {% if gerado_em and not grupos and not consultando %}<p>Nenhum movimento de caixa neste recorte.</p>{% endif %}
+  <div id="lojasCaixa"></div>
+  {% if gerado_em %}<p>Último movimento gravado: {{ gerado_em }}</p>{% endif %}
 </main>
+<script>
+const MOVIMENTOS = {{ movimentos|tojson }};
+const moeda = new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'});
+let esperaRecorte = null;
+function esc(valor) {
+  return String(valor ?? '').replace(/[&<>"]/g, caractere => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[caractere]));
+}
+function brData(iso) {
+  if (!iso || String(iso).length < 10) return '';
+  return iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4);
+}
+function tipoMarcado() {
+  const escolhido = document.querySelector('input[name="tipo"]:checked');
+  return escolhido ? escolhido.value : 'todos';
+}
+function dentro(item, inicio, fim) {
+  const data = String(item.data || '');
+  return !!inicio && !!fim && inicio <= fim && data >= inicio && data <= fim;
+}
+function aceitaTipo(item, tipo) {
+  if (tipo === 'entradas') return item.tipo === 'entrada';
+  if (tipo === 'saidas') return item.tipo === 'saida';
+  return true;
+}
+function lojasBase() {
+  const mapa = new Map();
+  MOVIMENTOS.forEach(item => {
+    const codigo = String(item.filial || '');
+    if (!mapa.has(codigo)) {
+      mapa.set(codigo, {codigo: codigo, nome: item.filialNome || codigo});
+    }
+  });
+  return [...mapa.values()].sort((a, b) => a.nome.localeCompare(b.nome, 'pt'));
+}
+function desenhar() {
+  const inicio = document.getElementById('inicio').value;
+  const fim = document.getElementById('fim').value;
+  const tipo = tipoMarcado();
+  const filtrados = MOVIMENTOS.filter(item => dentro(item, inicio, fim) && aceitaTipo(item, tipo));
+  const totais = {};
+  filtrados.forEach(item => {
+    const codigo = String(item.filial || '');
+    if (!totais[codigo]) totais[codigo] = {entradas: 0, saidas: 0, itens: []};
+    const grupo = totais[codigo];
+    grupo.itens.push(item);
+    if (item.tipo === 'entrada') grupo.entradas += Number(item.valor) || 0;
+    if (item.tipo === 'saida') grupo.saidas += Number(item.valor) || 0;
+  });
+  const lojas = lojasBase();
+  const maior = Math.max(1, ...lojas.map(loja => Math.max((totais[loja.codigo] || {}).entradas || 0, (totais[loja.codigo] || {}).saidas || 0)));
+  document.getElementById('graficoCaixa').innerHTML = lojas.map(loja => {
+    const grupo = totais[loja.codigo] || {entradas: 0, saidas: 0};
+    const alturaEntrada = Math.round(grupo.entradas / maior * 100);
+    const alturaSaida = Math.round(grupo.saidas / maior * 100);
+    return '<div class="col"><div class="par">'
+      + '<div class="barra entrada" style="height:' + alturaEntrada + '%" title="Entradas ' + moeda.format(grupo.entradas) + '"></div>'
+      + '<div class="barra despesa" style="height:' + alturaSaida + '%" title="Saídas ' + moeda.format(grupo.saidas) + '"></div>'
+      + '</div><span>' + esc(loja.nome) + '</span></div>';
+  }).join('') || '<p>Nenhum movimento de caixa gravado.</p>';
+  const caixa = document.getElementById('lojasCaixa');
+  caixa.innerHTML = lojas.map(loja => {
+    const grupo = totais[loja.codigo] || {entradas: 0, saidas: 0, itens: []};
+    const linhas = (grupo.itens || []).map(item =>
+      '<tr><td>' + brData(item.data) + '</td><td>' + esc(item.hora) + '</td><td>' + esc(item.historico) + '</td><td>' + (item.tipo === 'entrada' ? 'Entrada' : 'Saída') + '</td><td>' + esc(item.moeda) + '</td><td>' + esc(item.operador) + '</td><td>' + esc(item.obs) + '</td><td>' + moeda.format(Number(item.valor) || 0) + '</td></tr>'
+    ).join('') || '<tr><td colspan="8">Nenhum movimento neste recorte.</td></tr>';
+    return '<details class="card loja"><summary>' + esc(loja.nome) + ' · Entradas ' + moeda.format(grupo.entradas) + ' · Saídas ' + moeda.format(grupo.saidas) + '</summary><table><thead><tr><th>Data</th><th>Hora</th><th>Histórico</th><th>Tipo</th><th>Moeda</th><th>Operador</th><th>Observação</th><th>Valor</th></tr></thead><tbody>' + linhas + '</tbody></table></details>';
+  }).join('');
+  caixa.querySelectorAll('details.loja').forEach(detalhe => {
+    detalhe.addEventListener('toggle', function() {
+      if (!detalhe.open) return;
+      caixa.querySelectorAll('details.loja').forEach(outro => {
+        if (outro !== detalhe) outro.open = false;
+      });
+    });
+  });
+}
+function agendar() {
+  clearTimeout(esperaRecorte);
+  esperaRecorte = setTimeout(desenhar, 2000);
+}
+document.getElementById('inicio').addEventListener('input', agendar);
+document.getElementById('fim').addEventListener('input', agendar);
+document.getElementById('inicio').addEventListener('change', agendar);
+document.getElementById('fim').addEventListener('change', agendar);
+document.getElementById('inicio').addEventListener('blur', desenhar);
+document.getElementById('fim').addEventListener('blur', desenhar);
+document.querySelectorAll('input[name="tipo"]').forEach(campo => campo.addEventListener('change', desenhar));
+desenhar();
+</script>
 {% if consultando %}
 <script>
 (function(){

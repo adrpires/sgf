@@ -254,10 +254,19 @@ def parse_caixa(texto):
 
 def parse_relatorio(texto):
     fornecedor = ""
+    tipo_despesa = ""
     titulos = []
     for bruta in texto.splitlines():
         linha = bruta.replace("\xa0", " ").strip()
         if not linha or linha.startswith("Total") or linha.startswith("Página") or linha.startswith("Pagina"):
+            continue
+        if linha.startswith("Tipo Despesa:") or linha.startswith("Tipo de Despesa:"):
+            nome = re.sub(r"\s+", " ", linha.split(":", 1)[1]).strip()
+            partes = nome.split()
+            if len(partes) > 1 and partes[0].isdigit():
+                nome = " ".join(partes[1:])
+            if nome and not nome.upper().startswith("CONSIDERAR"):
+                tipo_despesa = nome
             continue
         if linha.startswith("Fornecedor:"):
             nome = re.sub(r"\s+", " ", linha.split(":", 1)[1]).strip()
@@ -296,6 +305,7 @@ def parse_relatorio(texto):
                 "juros": None if atipico else (0 if juros is None else juros),
                 "obs": "",
                 "atipico": atipico,
+                "tipoDespesa": tipo_despesa,
             }
         )
     return titulos
@@ -569,7 +579,7 @@ class Sessao:
         self.exp = token_exp(token)
         print("sessao ate", self.exp.isoformat())
 
-    def consultar(self, inicio, fim):
+    def _relatorio_classe(self, inicio, fim, selecao, classe):
         ini = datetime.strptime(inicio, "%Y-%m-%d")
         final = datetime.strptime(fim, "%Y-%m-%d")
         if final < ini or (final - ini).days > 400:
@@ -577,16 +587,16 @@ class Sessao:
         self.page.goto(self.base + "/Rel_0010.pod", wait_until="domcontentloaded", timeout=40000)
         self.page.wait_for_selector("#runReport", timeout=20000)
         self.page.evaluate(
-            """([ini, fim]) => {
+            """([ini, fim, selecao]) => {
                 document.getElementById('dat_inicio').value = ini;
                 document.getElementById('dat_fim').value = fim;
                 document.getElementById('selecao1_3').checked = true;
-                document.getElementById('selecao2_3').checked = true;
+                document.getElementById(selecao).checked = true;
                 document.getElementById('selecao3_1').checked = true;
                 document.getElementById('sel_filtroper_1').checked = true;
                 document.getElementById('saida3').checked = true;
             }""",
-            [ini.strftime("%d/%m/%Y"), final.strftime("%d/%m/%Y")],
+            [ini.strftime("%d/%m/%Y"), final.strftime("%d/%m/%Y"), selecao],
         )
         with self.page.expect_popup(timeout=150000) as espera:
             self.page.click("#runReport")
@@ -598,7 +608,17 @@ class Sessao:
         )
         texto = popup.evaluate("() => { const t = document.querySelector('table'); return t ? t.innerText : ''; }")
         popup.close()
-        return parse_relatorio(texto)
+        titulos = parse_relatorio(texto)
+        for item in titulos:
+            item["classe"] = classe
+            if classe == "despesa" and not item.get("tipoDespesa"):
+                item["tipoDespesa"] = item.get("fornecedor") or ""
+        return titulos
+
+    def consultar(self, inicio, fim):
+        fornecedores = self._relatorio_classe(inicio, fim, "selecao2_1", "fornecedor")
+        despesas = self._relatorio_classe(inicio, fim, "selecao2_2", "despesa")
+        return fornecedores + despesas
 
     def consultar_caixa(self, inicio, fim, tipo="todos"):
         ini = datetime.strptime(inicio, "%Y-%m-%d")
@@ -656,6 +676,26 @@ def ciclo(base, user, password, sessao, inicio="", fim=""):
     payload["titulosFim"] = fim
     payload["geradoEm"] = agora_fortaleza()
     gravar(payload, sessao.filial)
+    try:
+        hoje = hoje_fortaleza()
+        inicio_caixa = hoje.replace(day=1).isoformat()
+        fim_caixa = hoje.isoformat()
+        movimentos = sessao.consultar_caixa(inicio_caixa, fim_caixa, "todos")
+        gravar_json(
+            controle_dir() / "caixa-feito.json",
+            {
+                "id": "sync",
+                "ok": True,
+                "inicio": inicio_caixa,
+                "fim": fim_caixa,
+                "tipo": "todos",
+                "geradoEm": agora_fortaleza(),
+                "movimentos": movimentos,
+            },
+        )
+        print(f"caixa {inicio_caixa} {fim_caixa} movimentos={len(movimentos)}")
+    except Exception as exc:
+        print("falha caixa", type(exc).__name__)
 
 
 def ler_relatorio():

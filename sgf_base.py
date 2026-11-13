@@ -49,7 +49,9 @@ CREATE TABLE IF NOT EXISTS sgf_titulo (
     pago REAL,
     juros REAL,
     obs TEXT,
-    atipico INTEGER
+    atipico INTEGER,
+    classe TEXT,
+    tipo_despesa TEXT
 );
 CREATE TABLE IF NOT EXISTS sgf_conta (
     nome TEXT,
@@ -75,12 +77,21 @@ def _texto(valor):
     return str(valor)
 
 
+def garantir_colunas(conn):
+    conn.executescript(SCHEMA)
+    colunas = {linha[1] for linha in conn.execute("PRAGMA table_info(sgf_titulo)")}
+    if "classe" not in colunas:
+        conn.execute("ALTER TABLE sgf_titulo ADD COLUMN classe TEXT")
+    if "tipo_despesa" not in colunas:
+        conn.execute("ALTER TABLE sgf_titulo ADD COLUMN tipo_despesa TEXT")
+
+
 def salvar(payload):
     if not isinstance(payload, dict):
         return
     conn = conectar()
     try:
-        conn.executescript(SCHEMA)
+        garantir_colunas(conn)
         conn.execute("BEGIN IMMEDIATE")
         conn.execute("DELETE FROM sgf_linha")
         conn.execute("DELETE FROM sgf_titulo")
@@ -123,8 +134,8 @@ def salvar(payload):
         conn.executemany(
             """
             INSERT INTO sgf_titulo
-                (fornecedor, documento, filial, emissao, vencimento, pagamento, valor, pago, juros, obs, atipico)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (fornecedor, documento, filial, emissao, vencimento, pagamento, valor, pago, juros, obs, atipico, classe, tipo_despesa)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -139,6 +150,8 @@ def salvar(payload):
                     _numero(item.get("juros")),
                     _texto(item.get("obs")),
                     1 if item.get("atipico") else 0,
+                    _texto(item.get("classe")),
+                    _texto(item.get("tipoDespesa")),
                 )
                 for item in payload.get("titulos") or []
                 if isinstance(item, dict)
@@ -163,7 +176,7 @@ def ler():
         return {}
     conn = conectar()
     try:
-        conn.executescript(SCHEMA)
+        garantir_colunas(conn)
         sync = conn.execute("SELECT * FROM sgf_sync WHERE id = 1").fetchone()
         if not sync:
             return {}
@@ -193,6 +206,8 @@ def ler():
                 "juros": item["juros"],
                 "obs": item["obs"],
                 "atipico": bool(item["atipico"]),
+                "classe": item["classe"] or "",
+                "tipoDespesa": item["tipo_despesa"] or "",
             }
             for item in conn.execute("SELECT * FROM sgf_titulo")
         ]

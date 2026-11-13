@@ -534,13 +534,38 @@ class Sincronismo(unittest.TestCase):
         self.assertEqual(movimentos[2]["filialNome"], "LOJA NORTE")
         self.assertEqual(movimentos[2]["obs"], "")
 
+    def test_relatorio_guarda_o_tipo_de_despesa_do_sgf(self):
+        colunas = [""] * 17
+        colunas[0] = "1-1"
+        colunas[2] = "2"
+        colunas[4] = "01/11/26"
+        colunas[5] = "10/11/26"
+        colunas[10] = "100,00"
+        texto = (
+            "Tipo Despesa:\tCONSIDERAR: TODOS\n"
+            "Tipo Despesa:\t4\tALUGUEL\n"
+            "Fornecedor:\t9\tIMOBILIARIA\n"
+            + "\t".join(colunas)
+            + "\n"
+        )
+        itens = sync_sgf.parse_relatorio(texto)
+        self.assertEqual(len(itens), 1)
+        self.assertEqual(itens[0]["tipoDespesa"], "ALUGUEL")
+        self.assertEqual(itens[0]["fornecedor"], "9 IMOBILIARIA")
+        fonte = Path(sync_sgf.__file__).read_text(encoding="utf-8")
+        self.assertIn('"selecao2_1", "fornecedor"', fonte)
+        self.assertIn('"selecao2_2", "despesa"', fonte)
+
     def test_movimento_de_caixa_entra_no_menu_e_enfileira(self):
         cliente, resposta = self.entrar()
         self.assertIn("Movimento de caixa", resposta.get_data(as_text=True))
         pagina = cliente.get("/caixa")
         html = pagina.get_data(as_text=True)
         self.assertEqual(pagina.status_code, 200)
-        self.assertIn("Consultar no SGF", html)
+        self.assertNotIn("Consultar no SGF", html)
+        self.assertIn('id="graficoCaixa"', html)
+        self.assertIn("outro.open = false", html)
+        self.assertIn('class="card recortes"', html)
         token = csrf_de(html)
         pedido = cliente.post(
             "/caixa",
@@ -552,7 +577,7 @@ class Sincronismo(unittest.TestCase):
         self.assertEqual(gravado["inicio"], "2026-11-01")
         self.assertEqual(gravado["fim"], "2026-11-07")
         self.assertEqual(gravado["tipo"], "saidas")
-        self.assertIn("Consultando o movimento de caixa", pedido.get_data(as_text=True))
+        self.assertIn("concluindo um movimento de caixa", pedido.get_data(as_text=True))
         longo = cliente.post(
             "/caixa",
             data={"csrf": csrf_de(pedido.get_data(as_text=True)), "inicio": "2026-10-01", "fim": "2026-11-07", "tipo": "todos"},
@@ -630,7 +655,7 @@ class Sincronismo(unittest.TestCase):
             "geradoEm": "2026-11-13T10:00:00-03:00",
             "titulos": [
                 {
-                    "fornecedor": "Energia",
+                    "fornecedor": "Companhia de energia",
                     "documento": "1",
                     "filial": "2",
                     "emissao": "2026-11-02",
@@ -641,6 +666,8 @@ class Sincronismo(unittest.TestCase):
                     "juros": 0,
                     "obs": "",
                     "atipico": False,
+                    "classe": "despesa",
+                    "tipoDespesa": "Energia",
                 }
             ],
             "linhas": [],
@@ -655,37 +682,30 @@ class Sincronismo(unittest.TestCase):
         pagina = cliente.get("/metas")
         html = pagina.get_data(as_text=True)
         self.assertIn("Energia", html)
+        self.assertNotIn("Fornecedor em cada tipo", html)
         token = csrf_de(html)
-        salvo = cliente.post(
-            "/metas/tipos",
-            data={"csrf": token, "nome": "Aluguel", "valor": "1.000,00"},
-            follow_redirects=True,
-        )
-        self.assertIn("Tipo de despesa salvo", salvo.get_data(as_text=True))
-        pagina = cliente.get("/metas")
-        token = csrf_de(pagina.get_data(as_text=True))
         recusado = cliente.post(
-            "/metas/vinculos",
-            data={"csrf": token, "fornecedor": "Nao existe", "tipo": "Aluguel"},
+            "/metas/despesas",
+            data={"csrf": token, "nome": "Aluguel inventado", "valor": "10,00"},
             follow_redirects=True,
         )
-        self.assertIn("Fornecedor desconhecido", recusado.get_data(as_text=True))
+        self.assertIn("Despesa desconhecida", recusado.get_data(as_text=True))
         pagina = cliente.get("/metas")
         token = csrf_de(pagina.get_data(as_text=True))
-        vinculo = cliente.post(
-            "/metas/vinculos",
-            data={"csrf": token, "fornecedor": "Energia", "tipo": "Aluguel"},
+        salvo = cliente.post(
+            "/metas/despesas",
+            data={"csrf": token, "nome": "Energia", "valor": "1.000,00"},
             follow_redirects=True,
         )
-        self.assertIn("Vínculos de despesa salvos", vinculo.get_data(as_text=True))
+        self.assertIn("Meta de despesa salva", salvo.get_data(as_text=True))
         painel = cliente.get("/").get_data(as_text=True)
         self.assertIn("grid-template-columns:repeat(4, minmax(0, 1fr))", painel)
         self.assertIn(".cards { grid-template-columns:1fr; }", painel)
         self.assertIn("Tipo Fornecedores", painel)
         self.assertIn("Tipo Despesa", painel)
         self.assertIn('id="conciliacaoTipos"', painel)
-        self.assertIn("Aluguel", painel)
-        self.assertIn('"Energia": "Aluguel"', painel)
+        self.assertIn("Energia", painel)
+        self.assertIn('"nome": "Energia"', painel)
         self.assertNotIn("__TIPOS_DESPESA__", painel)
         self.assertNotIn("__MAPA_TIPO__", painel)
 
