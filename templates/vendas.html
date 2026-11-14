@@ -14,6 +14,11 @@
   .loja table tr:nth-child(even) td { background:#e7eef6; }
   html[data-tema="escuro"] .loja table tr:nth-child(even) td { background:#22344c; }
   .tabela-rolagem { overflow-x:auto; }
+  .barras { height:300px; align-items:flex-end; overflow-x:auto; }
+  .barras .col { height:auto; min-width:104px; justify-content:flex-end; }
+  .barras .par { height:160px; }
+  .barras .barra { width:28px; }
+  .valor-barra { font-size:11px; font-weight:800; line-height:1.2; text-align:center; color:var(--ink); white-space:nowrap; }
   .barras .col span { max-width:110px; text-align:center; font-size:12px; }
   @media (max-width:800px) {
     .recortes { flex-wrap:wrap; }
@@ -66,14 +71,15 @@ function dentro(item, inicio, fim) {
 }
 function barras(alvo, itens, vazio) {
   const caixa = document.getElementById(alvo);
-  if (!itens.length) {
+  const ordem = itens.filter(item => item.valor).sort((a, b) => b.valor - a.valor || String(a.nome).localeCompare(String(b.nome), 'pt'));
+  if (!ordem.length) {
     caixa.innerHTML = '<p>' + vazio + '</p>';
     return;
   }
-  const maior = Math.max(1, ...itens.map(item => item.valor));
-  caixa.innerHTML = itens.map(item => {
-    const altura = item.valor ? Math.max(2, Math.round(item.valor / maior * 100)) : 0;
-    return '<div class="col"><div class="par"><div class="barra entrada" style="height:' + altura + '%" title="' + esc(item.nome) + ' ' + moeda.format(item.valor) + '"></div></div><span>' + esc(item.nome) + '</span></div>';
+  const maior = Math.max(1, ...ordem.map(item => item.valor));
+  caixa.innerHTML = ordem.map(item => {
+    const altura = Math.max(4, Math.round(item.valor / maior * 150));
+    return '<div class="col"><strong class="valor-barra">' + moeda.format(item.valor) + '</strong><div class="par"><div class="barra entrada" style="height:' + altura + 'px" title="' + esc(item.nome) + ' ' + moeda.format(item.valor) + '"></div></div><span>' + esc(item.nome) + '</span></div>';
   }).join('');
 }
 function desenhar() {
@@ -95,9 +101,9 @@ function desenhar() {
     const mapa = item.formas || {};
     FORMAS.forEach(par => { formas[par[0]] += Number(mapa[par[0]]) || 0; });
   });
-  const ordem = [...lojas.entries()].sort((a, b) => Number(a[0]) - Number(b[0]));
+  const ordem = [...lojas.entries()].sort((a, b) => b[1].valor - a[1].valor || Number(a[0]) - Number(b[0]));
   barras('graficoVendas', ordem.map(par => ({nome: par[1].nome, valor: par[1].valor})), 'Nenhuma venda gravada neste período. Atualize o painel para o sincronismo buscar o relatório.');
-  barras('graficoDias', [...dias.entries()].sort((a, b) => a[0] < b[0] ? -1 : 1).map(par => ({nome: brData(par[0]), valor: par[1]})), 'Nenhum dia neste recorte.');
+  barras('graficoDias', [...dias.entries()].filter(par => par[0]).map(par => ({nome: brData(par[0]), valor: par[1]})), 'Nenhum dia neste recorte.');
   barras('graficoFormas', FORMAS.map(par => ({nome: par[1], valor: formas[par[0]]})).filter(item => item.valor), 'Nenhuma forma de pagamento neste recorte.');
   const caixa = document.getElementById('lojasVendas');
   caixa.innerHTML = ordem.map(par => {
