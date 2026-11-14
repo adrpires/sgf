@@ -252,6 +252,128 @@ def parse_caixa(texto):
     return movimentos
 
 
+FORMAS_VENDA = ("dinheiro", "chequeVista", "chequePre", "crediario", "convenio", "cartao")
+
+EXTRAIR_VENDAS = r"""() => {
+    const direto = tabela => [...tabela.querySelectorAll(':scope > tr, :scope > thead > tr, :scope > tbody > tr')];
+    const numero = texto => {
+        const limpo = String(texto || '').trim();
+        if (!/^-?\d{1,3}(?:\.\d{3})*(?:,\d+)?$/.test(limpo)) return null;
+        return Number(limpo.replace(/\./g, '').replace(',', '.'));
+    };
+    const numerosDa = tr => {
+        const folhas = [];
+        const visitar = td => {
+            const tabelas = [...td.children].filter(el => el.tagName === 'TABLE');
+            if (!tabelas.length) {
+                folhas.push(td.innerText.replace(/\s+/g, ' ').trim());
+                return;
+            }
+            tabelas.forEach(tabela => direto(tabela).forEach(linha => [...linha.cells].forEach(visitar)));
+        };
+        [...tr.cells].forEach(visitar);
+        const nums = [];
+        let moeda = false;
+        folhas.forEach(folha => {
+            if (nums.length >= 7) return;
+            const valor = numero(folha);
+            if (valor === null) return;
+            if (folha.includes(',')) moeda = true;
+            nums.push(valor);
+        });
+        if (nums.length < 7) return null;
+        const soma = nums.slice(0, 6).reduce((total, valor) => total + valor, 0);
+        if (Math.abs(soma - nums[6]) > 0.05) return null;
+        return {numeros: nums.slice(0, 7), moeda};
+    };
+    const eventos = [];
+    [...document.querySelectorAll('table')].filter(item => direto(item).length > 8).forEach(tabela => {
+        direto(tabela).forEach(tr => {
+            const texto = tr.innerText.replace(/\s+/g, ' ').trim();
+            const filial = texto.match(/^FILIAL:\s*(\d+)\s*(.*)$/);
+            if (filial && tr.cells.length <= 4) {
+                eventos.push({tipo: 'filial', filial: filial[1], nome: (filial[2] || '').trim()});
+                return;
+            }
+            if (/^\d{2}\/\d{2}\/\d{4}$/.test(texto) && tr.cells.length <= 4) {
+                eventos.push({tipo: 'data', data: texto});
+                return;
+            }
+            if (/^TOTAL/.test(texto)) {
+                eventos.push({tipo: 'total'});
+                return;
+            }
+            const valores = numerosDa(tr);
+            if (valores) eventos.push(Object.assign({tipo: 'valores'}, valores));
+        });
+    });
+    return eventos;
+}"""
+
+
+def montar_vendas(eventos):
+    if not isinstance(eventos, list):
+        return []
+    filial = ""
+    nome = ""
+    data = ""
+    balde = []
+    dias = []
+
+    def fechar():
+        nonlocal data, balde
+        if not data or not balde:
+            balde = []
+            return
+        inteiros = [item for item in balde if isinstance(item, dict) and not item.get("moeda")]
+        moedas = [item for item in balde if isinstance(item, dict) and item.get("moeda")]
+        balde = []
+        if not inteiros or len(moedas) < 3:
+            return
+        qtd = inteiros[0].get("numeros") or []
+        bruto = moedas[0].get("numeros") or []
+        desconto = moedas[1].get("numeros") or []
+        liquido = moedas[2].get("numeros") or []
+        if len(qtd) < 7 or len(bruto) < 7 or len(desconto) < 7 or len(liquido) < 7:
+            return
+        dias.append(
+            {
+                "filial": filial,
+                "filialNome": nome,
+                "data": data,
+                "qtd": int(round(float(qtd[6]))),
+                "bruto": round(float(bruto[6]), 2),
+                "desconto": round(float(desconto[6]), 2),
+                "liquido": round(float(liquido[6]), 2),
+                "formas": {
+                    chave: round(float(liquido[indice]), 2)
+                    for indice, chave in enumerate(FORMAS_VENDA)
+                },
+            }
+        )
+
+    for evento in eventos:
+        if not isinstance(evento, dict):
+            continue
+        tipo = evento.get("tipo")
+        if tipo == "filial":
+            fechar()
+            filial = str(evento.get("filial") or "").strip()
+            nome = str(evento.get("nome") or "").strip()
+            data = ""
+        elif tipo == "data":
+            fechar()
+            partes = str(evento.get("data") or "").split("/")
+            data = f"{partes[2]}-{partes[1]}-{partes[0]}" if len(partes) == 3 else ""
+        elif tipo == "total":
+            fechar()
+            data = ""
+        elif tipo == "valores" and data:
+            balde.append(evento)
+    fechar()
+    return dias
+
+
 def parse_relatorio(texto):
     fornecedor = ""
     tipo_despesa = ""
@@ -651,6 +773,37 @@ class Sessao:
         popup.close()
         return parse_caixa(texto)
 
+    def consultar_vendas(self, inicio, fim):
+        ini = datetime.strptime(inicio, "%Y-%m-%d")
+        final = datetime.strptime(fim, "%Y-%m-%d")
+        if final < ini or (final - ini).days > 31:
+            raise ValueError("periodo invalido")
+        self.page.goto(self.base + "/Rel_0056.pod", wait_until="domcontentloaded", timeout=40000)
+        self.page.wait_for_selector("#runReport", timeout=20000)
+        self.page.evaluate(
+            """([ini, fim]) => {
+                document.getElementById('dat_inicio').value = ini;
+                document.getElementById('dat_fim').value = fim;
+                document.getElementById('selI_0').checked = true;
+                document.getElementById('agrup_fil_2').checked = true;
+                document.getElementById('saida_3').checked = true;
+                const total = document.getElementById('chk_som_total');
+                if (total) total.checked = false;
+            }""",
+            [ini.strftime("%d/%m/%Y"), final.strftime("%d/%m/%Y")],
+        )
+        with self.page.expect_popup(timeout=180000) as espera:
+            self.page.click("#runReport")
+        popup = espera.value
+        popup.wait_for_load_state("domcontentloaded", timeout=180000)
+        popup.wait_for_function(
+            "() => document.body && (document.body.innerText.includes('FILIAL:') || document.body.innerText.includes('Nenhum relat'))",
+            timeout=180000,
+        )
+        eventos = popup.evaluate(EXTRAIR_VENDAS)
+        popup.close()
+        return montar_vendas(eventos)
+
 
 def periodo_consulta(inicio, fim):
     padrao_inicio, padrao_fim = janela_financeira()
@@ -696,6 +849,25 @@ def ciclo(base, user, password, sessao, inicio="", fim=""):
         print(f"caixa {inicio_caixa} {fim_caixa} movimentos={len(movimentos)}")
     except Exception as exc:
         print("falha caixa", type(exc).__name__)
+    try:
+        hoje_vendas = hoje_fortaleza()
+        inicio_vendas = hoje_vendas.replace(day=1).isoformat()
+        fim_vendas = hoje_vendas.isoformat()
+        vendas = sessao.consultar_vendas(inicio_vendas, fim_vendas)
+        gravar_json(
+            controle_dir() / "vendas-feito.json",
+            {
+                "id": "sync",
+                "ok": True,
+                "inicio": inicio_vendas,
+                "fim": fim_vendas,
+                "geradoEm": agora_fortaleza(),
+                "vendas": vendas,
+            },
+        )
+        print(f"vendas {inicio_vendas} {fim_vendas} dias={len(vendas)}")
+    except Exception as exc:
+        print("falha vendas", type(exc).__name__)
 
 
 def ler_relatorio():

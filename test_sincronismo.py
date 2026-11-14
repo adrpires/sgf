@@ -724,6 +724,65 @@ class Sincronismo(unittest.TestCase):
         self.assertIn('id="sessoesSaidas"', pagina)
         self.assertIn('id="contas"', pagina)
 
+    def test_vendas_por_data_le_o_relatorio_completo_por_filial(self):
+        eventos = [
+            {"tipo": "filial", "filial": "2", "nome": "COMPRE AQUI | MATRIZ"},
+            {"tipo": "data", "data": "13/11/2026"},
+            {"tipo": "valores", "moeda": False, "numeros": [124, 0, 0, 0, 2, 230, 356]},
+            {"tipo": "valores", "moeda": True, "numeros": [5220.09, 0, 0, 0, 20.48, 12215.72, 17456.29]},
+            {"tipo": "valores", "moeda": True, "numeros": [1891.35, 0, 0, 0, 0, 4021.99, 5913.34]},
+            {"tipo": "valores", "moeda": True, "numeros": [3328.74, 0, 0, 0, 20.48, 8193.73, 11542.95]},
+            {"tipo": "total"},
+            {"tipo": "filial", "filial": "4", "nome": "COMPRE AQUI | CAUCAIA"},
+            {"tipo": "data", "data": "13/11/2026"},
+            {"tipo": "valores", "moeda": False, "numeros": [83, 0, 0, 0, 0, 58, 141]},
+            {"tipo": "valores", "moeda": True, "numeros": [4783.97, 0, 0, 0, 0, 3497.03, 8281.00]},
+            {"tipo": "valores", "moeda": True, "numeros": [2248.26, 0, 0, 0, 0, 1424.43, 3672.69]},
+            {"tipo": "valores", "moeda": True, "numeros": [2535.71, 0, 0, 0, 0, 2072.60, 4608.31]},
+        ]
+        dias = sync_sgf.montar_vendas(eventos)
+        self.assertEqual(dias[0]["qtd"], 356)
+        self.assertEqual(dias[0]["liquido"], 11542.95)
+        self.assertEqual(dias[0]["formas"]["dinheiro"], 3328.74)
+        self.assertEqual(dias[0]["formas"]["cartao"], 8193.73)
+        self.assertEqual(dias[1]["filialNome"], "COMPRE AQUI | CAUCAIA")
+        origem = Path(sync_sgf.__file__).read_text(encoding="utf-8")
+        self.assertIn("document.getElementById('selI_0').checked = true;", origem)
+        self.assertIn("document.getElementById('agrup_fil_2').checked = true;", origem)
+        self.assertIn("total.checked = false;", origem)
+        (CONTROLE / "vendas-feito.json").write_text(
+            json.dumps(
+                {
+                    "id": "sync",
+                    "ok": True,
+                    "inicio": "2026-11-01",
+                    "fim": "2026-11-13",
+                    "geradoEm": "2026-11-13T10:00:00-03:00",
+                    "vendas": dias,
+                }
+            ),
+            encoding="utf-8",
+        )
+        with aplicacao.conectar() as conn:
+            usuario = conn.execute("SELECT id FROM usuarios WHERE login = ?", ("consulta",)).fetchone()
+            conn.execute("DELETE FROM usuario_lojas WHERE usuario_id = ?", (usuario["id"],))
+            conn.execute(
+                "INSERT INTO usuario_lojas (usuario_id, origem) VALUES (?, ?)",
+                (usuario["id"], "2"),
+            )
+        try:
+            cliente, _resposta = self.entrar("consulta")
+            html = cliente.get("/vendas").get_data(as_text=True)
+            self.assertIn(">Vendas por data<", html)
+            self.assertIn('id="graficoVendas"', html)
+            self.assertIn("outro.open = false", html)
+            self.assertNotIn("Consultar", html)
+            self.assertIn("COMPRE AQUI | MATRIZ", html)
+            self.assertNotIn("CAUCAIA", html)
+        finally:
+            with aplicacao.conectar() as conn:
+                conn.execute("DELETE FROM usuario_lojas WHERE usuario_id = ?", (usuario["id"],))
+
 
 if __name__ == "__main__":
     unittest.main()

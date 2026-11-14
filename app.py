@@ -280,6 +280,7 @@ def montar_menu(usuario, ativo=""):
         link("/", "Dashboard"),
         link("/detalhes", "Detalhes"),
         link("/caixa", "Movimento de caixa"),
+        link("/vendas", "Vendas por data"),
         link("/lancamentos", "Relatório de entradas e despesas manual"),
     ]
     if usuario["admin"]:
@@ -1112,6 +1113,7 @@ def responder_painel(pagina):
         )
         + '<a style="color:#fff" href="/detalhes">Detalhes</a>'
         + '<a style="color:#fff" href="/caixa">Movimento de caixa</a>'
+        + '<a style="color:#fff" href="/vendas">Vendas por data</a>'
         + '<a style="color:#fff" href="/senha">Senha</a>'
         + '<form method="post" action="/sair" style="margin:0">'
         + f'<input type="hidden" name="csrf" value="{html.escape(csrf)}">'
@@ -1486,6 +1488,21 @@ def usuario_editar_post(usuario_id):
     return redirect(f"/usuarios/{alvo['id']}")
 
 
+def filtrar_vendas(vendas, permitidas):
+    if acesso_completo(permitidas):
+        return [item for item in vendas if isinstance(item, dict)]
+    return [
+        item
+        for item in vendas
+        if isinstance(item, dict) and codigo_origem(item.get("filial")) in permitidas
+    ]
+
+
+def ler_vendas_feito():
+    dados = ler_json(CONTROLE / "vendas-feito.json")
+    return dados if isinstance(dados, dict) else {}
+
+
 def filtrar_caixa(movimentos, permitidas):
     if acesso_completo(permitidas):
         return [item for item in movimentos if isinstance(item, dict)]
@@ -1562,6 +1579,26 @@ def caixa_form():
         consultando=consultando,
         pedido_id=pedido_id,
         moeda_br=moeda_br,
+    )
+
+
+@app.get("/vendas")
+def vendas_form():
+    usuario, resposta = exigir_login()
+    if resposta:
+        return resposta
+    feito = ler_vendas_feito()
+    vendas = filtrar_vendas(feito.get("vendas") or [], acesso_lojas(usuario))
+    hoje = datetime.now(FORTALEZA).date()
+    return render_template(
+        "vendas.html",
+        aviso=session.pop("aviso", ""),
+        inicio=hoje.replace(day=1).isoformat(),
+        fim=hoje.isoformat(),
+        gerado_em=texto_fortaleza(feito.get("geradoEm")),
+        cobertura_inicio=str(feito.get("inicio") or ""),
+        cobertura_fim=str(feito.get("fim") or ""),
+        vendas=vendas,
     )
 
 
