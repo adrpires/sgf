@@ -794,6 +794,16 @@ class Sincronismo(unittest.TestCase):
         self.assertEqual(fatias[-1], (date(2026, 11, 1), date(2026, 11, 16)))
         self.assertEqual(len(fatias), 5)
         self.assertTrue(all((fim - ini).days <= 31 for ini, fim in fatias))
+        pedacos = list(sync_sgf.fatias_de(date(2026, 7, 1), date(2026, 7, 31), 10))
+        self.assertEqual(
+            pedacos,
+            [
+                (date(2026, 7, 1), date(2026, 7, 10)),
+                (date(2026, 7, 11), date(2026, 7, 20)),
+                (date(2026, 7, 21), date(2026, 7, 30)),
+                (date(2026, 7, 31), date(2026, 7, 31)),
+            ],
+        )
         caminho = CONTROLE / "caixa-feito.json"
         sync_sgf.gravar_recorte(
             caminho,

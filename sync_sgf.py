@@ -380,6 +380,14 @@ def inicio_historico(hoje=None):
     return hoje.replace(year=ano, month=7, day=1)
 
 
+def fatias_de(inicio, fim, dias):
+    cursor = inicio
+    while cursor <= fim:
+        fatia_fim = min(fim, cursor + timedelta(days=dias - 1))
+        yield cursor, fatia_fim
+        cursor = fatia_fim + timedelta(days=1)
+
+
 def meses_no_intervalo(inicio, fim):
     cursor = inicio
     while cursor <= fim:
@@ -439,6 +447,19 @@ def gravar_recorte(caminho, chave, novos, inicio, fim, tipo="todos", identificad
     return payload
 
 
+def marcar_mes(caminho, inicio):
+    anterior = ler_json(caminho)
+    if not isinstance(anterior, dict):
+        return
+    meses = [item for item in (anterior.get("meses") or []) if isinstance(item, str)]
+    mes = inicio[:7]
+    if mes and mes not in meses:
+        meses.append(mes)
+        meses.sort()
+        anterior["meses"] = meses
+        gravar_json(caminho, anterior)
+
+
 def completar_historico(sessao):
     hoje = hoje_fortaleza()
     mes_atual = hoje.strftime("%Y-%m")
@@ -457,24 +478,30 @@ def completar_historico(sessao):
                     fim.isoformat(),
                     marcar=True,
                 )
-                print(f"caixa {inicio.isoformat()} {fim.isoformat()} movimentos={len(movimentos)}")
+                print(f"caixa {inicio.isoformat()} {fim.isoformat()} movimentos={len(movimentos)}", flush=True)
             except Exception as exc:
-                print("falha caixa", type(exc).__name__, inicio.isoformat())
+                print("falha caixa", type(exc).__name__, inicio.isoformat(), flush=True)
         vendas = ler_json(controle_dir() / "vendas-feito.json")
         if atual or mes not in set(vendas.get("meses") or []):
-            try:
-                dias = sessao.consultar_vendas(inicio.isoformat(), fim.isoformat())
-                gravar_recorte(
-                    controle_dir() / "vendas-feito.json",
-                    "vendas",
-                    dias,
-                    inicio.isoformat(),
-                    fim.isoformat(),
-                    marcar=True,
-                )
-                print(f"vendas {inicio.isoformat()} {fim.isoformat()} dias={len(dias)}")
-            except Exception as exc:
-                print("falha vendas", type(exc).__name__, inicio.isoformat())
+            vendas_ok = True
+            for pedaco_ini, pedaco_fim in fatias_de(inicio, fim, 10):
+                try:
+                    dias = sessao.consultar_vendas(pedaco_ini.isoformat(), pedaco_fim.isoformat())
+                    gravar_recorte(
+                        controle_dir() / "vendas-feito.json",
+                        "vendas",
+                        dias,
+                        pedaco_ini.isoformat(),
+                        pedaco_fim.isoformat(),
+                        marcar=False,
+                    )
+                    print(f"vendas {pedaco_ini.isoformat()} {pedaco_fim.isoformat()} dias={len(dias)}", flush=True)
+                except Exception as exc:
+                    vendas_ok = False
+                    print("falha vendas", type(exc).__name__, pedaco_ini.isoformat(), flush=True)
+                    break
+            if vendas_ok:
+                marcar_mes(controle_dir() / "vendas-feito.json", inicio.isoformat())
 
 
 def parse_relatorio(texto):
