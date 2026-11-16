@@ -69,9 +69,11 @@ function dentro(item, inicio, fim) {
   const data = String(item.data || '');
   return !!inicio && !!fim && inicio <= fim && data >= inicio && data <= fim;
 }
-function barras(alvo, itens, vazio) {
+function barras(alvo, itens, vazio, porData) {
   const caixa = document.getElementById(alvo);
-  const ordem = itens.filter(item => item.valor).sort((a, b) => b.valor - a.valor || String(a.nome).localeCompare(String(b.nome), 'pt'));
+  const ordem = itens.filter(item => item.valor).sort(porData
+    ? (a, b) => String(a.data).localeCompare(String(b.data))
+    : (a, b) => b.valor - a.valor || String(a.nome).localeCompare(String(b.nome), 'pt'));
   if (!ordem.length) {
     caixa.innerHTML = '<p>' + vazio + '</p>';
     return;
@@ -103,7 +105,7 @@ function desenhar() {
   });
   const ordem = [...lojas.entries()].sort((a, b) => b[1].valor - a[1].valor || Number(a[0]) - Number(b[0]));
   barras('graficoVendas', ordem.map(par => ({nome: par[1].nome, valor: par[1].valor})), 'Nenhuma venda gravada neste período. Atualize o painel para o sincronismo buscar o relatório.');
-  barras('graficoDias', [...dias.entries()].filter(par => par[0]).map(par => ({nome: brData(par[0]), valor: par[1]})), 'Nenhum dia neste recorte.');
+  barras('graficoDias', [...dias.entries()].filter(par => par[0]).map(par => ({nome: brData(par[0]), data: par[0], valor: par[1]})), 'Nenhum dia neste recorte.', true);
   barras('graficoFormas', FORMAS.map(par => ({nome: par[1], valor: formas[par[0]]})).filter(item => item.valor), 'Nenhuma forma de pagamento neste recorte.');
   const caixa = document.getElementById('lojasVendas');
   caixa.innerHTML = ordem.map(par => {

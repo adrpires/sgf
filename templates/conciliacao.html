@@ -72,9 +72,11 @@ function moedaDinheiro(moedaCaixa) {
   const texto = String(moedaCaixa || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
   return !texto || texto.includes('DINH');
 }
-function barrasDuplas(alvo, itens, vazio) {
+function barrasDuplas(alvo, itens, vazio, porData) {
   const caixa = document.getElementById(alvo);
-  const ordem = itens.filter(item => item.dinheiro || item.saidas).sort((a, b) => Math.max(b.dinheiro, b.saidas) - Math.max(a.dinheiro, a.saidas) || String(a.nome).localeCompare(String(b.nome), 'pt'));
+  const ordem = itens.filter(item => item.dinheiro || item.saidas).sort(porData
+    ? (a, b) => String(a.data).localeCompare(String(b.data))
+    : (a, b) => Math.max(b.dinheiro, b.saidas) - Math.max(a.dinheiro, a.saidas) || String(a.nome).localeCompare(String(b.nome), 'pt'));
   if (!ordem.length) {
     caixa.innerHTML = '<p>' + vazio + '</p>';
     return;
@@ -137,13 +139,13 @@ function desenhar() {
   const dias = new Map();
   ordem.forEach(grupo => grupo.dias.forEach(dia => {
     if (!dia.data) return;
-    if (!dias.has(dia.data)) dias.set(dia.data, {nome: brData(dia.data), dinheiro: 0, saidas: 0});
+    if (!dias.has(dia.data)) dias.set(dia.data, {nome: brData(dia.data), data: dia.data, dinheiro: 0, saidas: 0});
     const total = dias.get(dia.data);
     total.dinheiro += dia.dinheiro;
     total.saidas += dia.saidas;
   }));
   barrasDuplas('graficoLojas', ordem, 'Nenhuma venda em dinheiro nem saída de caixa neste recorte.');
-  barrasDuplas('graficoDias', [...dias.values()], 'Nenhum dia neste recorte.');
+  barrasDuplas('graficoDias', [...dias.values()], 'Nenhum dia neste recorte.', true);
   barras('graficoDif', ordem.map(grupo => ({nome: grupo.nome, valor: grupo.dinheiro - grupo.saidas})), 'Nenhuma loja neste recorte.');
   const caixa = document.getElementById('lojasConciliacao');
   caixa.innerHTML = ordem.map(grupo => {
