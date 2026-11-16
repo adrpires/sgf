@@ -374,6 +374,109 @@ def montar_vendas(eventos):
     return dias
 
 
+def inicio_historico(hoje=None):
+    hoje = hoje or hoje_fortaleza()
+    ano = hoje.year if hoje.month >= 7 else hoje.year - 1
+    return hoje.replace(year=ano, month=7, day=1)
+
+
+def meses_no_intervalo(inicio, fim):
+    cursor = inicio
+    while cursor <= fim:
+        if cursor.month == 12:
+            proximo = cursor.replace(year=cursor.year + 1, month=1, day=1)
+        else:
+            proximo = cursor.replace(month=cursor.month + 1, day=1)
+        yield cursor, min(fim, proximo - timedelta(days=1))
+        cursor = proximo
+
+
+def mesclar_intervalo(anteriores, novos, inicio, fim, tipo=None):
+    def permanece(item):
+        if not isinstance(item, dict):
+            return False
+        data = str(item.get("data") or "")
+        if data < inicio or data > fim:
+            return True
+        if tipo and item.get("tipo") != tipo:
+            return True
+        return False
+
+    return [item for item in anteriores if permanece(item)] + [
+        item for item in novos if isinstance(item, dict)
+    ]
+
+
+def ampliar_cobertura(antigo_inicio, antigo_fim, inicio, fim):
+    coberto_de = str(antigo_inicio or inicio)
+    coberto_ate = str(antigo_fim or fim)
+    return min(coberto_de, inicio), max(coberto_ate, fim)
+
+
+def gravar_recorte(caminho, chave, novos, inicio, fim, tipo="todos", identificador="sync", marcar=False):
+    anterior = ler_json(caminho)
+    if not isinstance(anterior, dict):
+        anterior = {}
+    lista = anterior.get(chave) if isinstance(anterior.get(chave), list) else []
+    filtro = {"entradas": "entrada", "saidas": "saida"}.get(tipo)
+    cob_ini, cob_fim = ampliar_cobertura(anterior.get("inicio"), anterior.get("fim"), inicio, fim)
+    meses = [item for item in (anterior.get("meses") or []) if isinstance(item, str)]
+    if marcar and inicio[:7] and inicio[:7] not in meses:
+        meses.append(inicio[:7])
+        meses.sort()
+    payload = {
+        "id": identificador,
+        "ok": True,
+        "inicio": cob_ini,
+        "fim": cob_fim,
+        "geradoEm": agora_fortaleza(),
+        "meses": meses,
+        chave: mesclar_intervalo(lista, novos, inicio, fim, filtro),
+    }
+    if chave == "movimentos":
+        payload["tipo"] = "todos"
+    gravar_json(caminho, payload)
+    return payload
+
+
+def completar_historico(sessao):
+    hoje = hoje_fortaleza()
+    mes_atual = hoje.strftime("%Y-%m")
+    for inicio, fim in meses_no_intervalo(inicio_historico(hoje), hoje):
+        mes = inicio.strftime("%Y-%m")
+        atual = mes == mes_atual
+        caixa = ler_json(controle_dir() / "caixa-feito.json")
+        if atual or mes not in set(caixa.get("meses") or []):
+            try:
+                movimentos = sessao.consultar_caixa(inicio.isoformat(), fim.isoformat(), "todos")
+                gravar_recorte(
+                    controle_dir() / "caixa-feito.json",
+                    "movimentos",
+                    movimentos,
+                    inicio.isoformat(),
+                    fim.isoformat(),
+                    marcar=True,
+                )
+                print(f"caixa {inicio.isoformat()} {fim.isoformat()} movimentos={len(movimentos)}")
+            except Exception as exc:
+                print("falha caixa", type(exc).__name__, inicio.isoformat())
+        vendas = ler_json(controle_dir() / "vendas-feito.json")
+        if atual or mes not in set(vendas.get("meses") or []):
+            try:
+                dias = sessao.consultar_vendas(inicio.isoformat(), fim.isoformat())
+                gravar_recorte(
+                    controle_dir() / "vendas-feito.json",
+                    "vendas",
+                    dias,
+                    inicio.isoformat(),
+                    fim.isoformat(),
+                    marcar=True,
+                )
+                print(f"vendas {inicio.isoformat()} {fim.isoformat()} dias={len(dias)}")
+            except Exception as exc:
+                print("falha vendas", type(exc).__name__, inicio.isoformat())
+
+
 def parse_relatorio(texto):
     fornecedor = ""
     tipo_despesa = ""
@@ -830,44 +933,9 @@ def ciclo(base, user, password, sessao, inicio="", fim=""):
     payload["geradoEm"] = agora_fortaleza()
     gravar(payload, sessao.filial)
     try:
-        hoje = hoje_fortaleza()
-        inicio_caixa = hoje.replace(day=1).isoformat()
-        fim_caixa = hoje.isoformat()
-        movimentos = sessao.consultar_caixa(inicio_caixa, fim_caixa, "todos")
-        gravar_json(
-            controle_dir() / "caixa-feito.json",
-            {
-                "id": "sync",
-                "ok": True,
-                "inicio": inicio_caixa,
-                "fim": fim_caixa,
-                "tipo": "todos",
-                "geradoEm": agora_fortaleza(),
-                "movimentos": movimentos,
-            },
-        )
-        print(f"caixa {inicio_caixa} {fim_caixa} movimentos={len(movimentos)}")
+        completar_historico(sessao)
     except Exception as exc:
-        print("falha caixa", type(exc).__name__)
-    try:
-        hoje_vendas = hoje_fortaleza()
-        inicio_vendas = hoje_vendas.replace(day=1).isoformat()
-        fim_vendas = hoje_vendas.isoformat()
-        vendas = sessao.consultar_vendas(inicio_vendas, fim_vendas)
-        gravar_json(
-            controle_dir() / "vendas-feito.json",
-            {
-                "id": "sync",
-                "ok": True,
-                "inicio": inicio_vendas,
-                "fim": fim_vendas,
-                "geradoEm": agora_fortaleza(),
-                "vendas": vendas,
-            },
-        )
-        print(f"vendas {inicio_vendas} {fim_vendas} dias={len(vendas)}")
-    except Exception as exc:
-        print("falha vendas", type(exc).__name__)
+        print("falha historico", type(exc).__name__)
 
 
 def ler_relatorio():
@@ -936,21 +1004,19 @@ def atender_caixa(sessao, ultimo_id):
                 "fim": anterior.get("fim") or "",
                 "tipo": anterior.get("tipo") or "todos",
                 "geradoEm": anterior.get("geradoEm") or "",
+                "meses": anterior.get("meses") or [],
                 "movimentos": anterior.get("movimentos") or [],
             },
         )
     else:
-        gravar_json(
+        gravar_recorte(
             controle_dir() / "caixa-feito.json",
-            {
-                "id": pedido_id,
-                "ok": ok,
-                "inicio": str(pedido.get("inicio") or ""),
-                "fim": str(pedido.get("fim") or ""),
-                "tipo": str(pedido.get("tipo") or "todos"),
-                "geradoEm": agora_fortaleza() if ok else "",
-                "movimentos": movimentos,
-            },
+            "movimentos",
+            movimentos,
+            str(pedido.get("inicio") or ""),
+            str(pedido.get("fim") or ""),
+            str(pedido.get("tipo") or "todos"),
+            pedido_id,
         )
     return pedido_id
 
@@ -1001,6 +1067,12 @@ def servir_agenda(sessao, base, padrao):
     ultimo_fim = destino().stat().st_mtime if painel_valido() else 0.0
     if ultimo_fim:
         print("painel existente; proxima consulta segue a agenda")
+    try:
+        user, password = credenciais()
+        sessao.garantir(user, password)
+        completar_historico(sessao)
+    except Exception as exc:
+        print("falha historico", type(exc).__name__)
     while True:
         ultimo_caixa = atender_caixa(sessao, ultimo_caixa)
         ultimo_relatorio = atender_relatorio(sessao, ultimo_relatorio)

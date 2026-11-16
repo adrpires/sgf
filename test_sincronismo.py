@@ -786,6 +786,113 @@ class Sincronismo(unittest.TestCase):
             with aplicacao.conectar() as conn:
                 conn.execute("DELETE FROM usuario_lojas WHERE usuario_id = ?", (usuario["id"],))
 
+    def test_historico_desde_julho_preserva_os_meses_anteriores(self):
+        self.assertEqual(sync_sgf.inicio_historico(date(2026, 11, 16)), date(2026, 7, 1))
+        self.assertEqual(sync_sgf.inicio_historico(date(2026, 6, 30)), date(2025, 7, 1))
+        fatias = list(sync_sgf.meses_no_intervalo(date(2026, 7, 1), date(2026, 11, 16)))
+        self.assertEqual(fatias[0], (date(2026, 7, 1), date(2026, 7, 31)))
+        self.assertEqual(fatias[-1], (date(2026, 11, 1), date(2026, 11, 16)))
+        self.assertEqual(len(fatias), 5)
+        self.assertTrue(all((fim - ini).days <= 31 for ini, fim in fatias))
+        caminho = CONTROLE / "caixa-feito.json"
+        sync_sgf.gravar_recorte(
+            caminho,
+            "movimentos",
+            [{"filial": "2", "data": "2026-07-02", "tipo": "saida", "valor": 10}],
+            "2026-07-01",
+            "2026-07-31",
+            marcar=True,
+        )
+        sync_sgf.gravar_recorte(
+            caminho,
+            "movimentos",
+            [
+                {"filial": "2", "data": "2026-11-02", "tipo": "entrada", "valor": 5},
+                {"filial": "2", "data": "2026-11-02", "tipo": "saida", "valor": 20},
+            ],
+            "2026-11-01",
+            "2026-11-16",
+            marcar=True,
+        )
+        sync_sgf.gravar_recorte(
+            caminho,
+            "movimentos",
+            [{"filial": "2", "data": "2026-11-02", "tipo": "saida", "valor": 7}],
+            "2026-11-01",
+            "2026-11-16",
+            "saidas",
+        )
+        guardado = json.loads(caminho.read_text(encoding="utf-8"))
+        julho = [item for item in guardado["movimentos"] if item["data"] == "2026-07-02"]
+        novembro = sorted(item["valor"] for item in guardado["movimentos"] if item["data"] == "2026-11-02")
+        self.assertEqual(julho[0]["valor"], 10)
+        self.assertEqual(novembro, [5, 7])
+        self.assertEqual(guardado["inicio"], "2026-07-01")
+        self.assertEqual(guardado["fim"], "2026-11-16")
+        self.assertEqual(guardado["meses"], ["2026-07", "2026-11"])
+        self.assertIn("completar_historico(sessao)", Path(sync_sgf.__file__).read_text(encoding="utf-8"))
+
+    def test_conciliacao_cruza_dinheiro_da_venda_com_saida_do_caixa(self):
+        (CONTROLE / "vendas-feito.json").write_text(
+            json.dumps(
+                {
+                    "ok": True,
+                    "inicio": "2026-07-01",
+                    "fim": "2026-11-16",
+                    "geradoEm": "2026-11-16T08:00:00-03:00",
+                    "vendas": [
+                        {"filial": "2", "filialNome": "COMPRE AQUI | MATRIZ", "data": "2026-07-02", "liquido": 100, "formas": {"dinheiro": 80}},
+                        {"filial": "4", "filialNome": "COMPRE AQUI | CAUCAIA", "data": "2026-07-02", "liquido": 50, "formas": {"dinheiro": 40}},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (CONTROLE / "caixa-feito.json").write_text(
+            json.dumps(
+                {
+                    "ok": True,
+                    "inicio": "2026-07-01",
+                    "fim": "2026-11-16",
+                    "tipo": "todos",
+                    "geradoEm": "2026-11-16T08:00:00-03:00",
+                    "movimentos": [
+                        {"filial": "2", "filialNome": "COMPRE AQUI | MATRIZ", "historico": "SANGRIA", "data": "2026-07-02", "valor": 30, "tipo": "saida", "moeda": "DINHEIRO"},
+                        {"filial": "4", "filialNome": "COMPRE AQUI | CAUCAIA", "historico": "SANGRIA", "data": "2026-07-02", "valor": 10, "tipo": "saida", "moeda": "DINHEIRO"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        with aplicacao.conectar() as conn:
+            usuario = conn.execute("SELECT id FROM usuarios WHERE login = ?", ("consulta",)).fetchone()
+            conn.execute("DELETE FROM usuario_lojas WHERE usuario_id = ?", (usuario["id"],))
+            conn.execute(
+                "INSERT INTO usuario_lojas (usuario_id, origem) VALUES (?, ?)",
+                (usuario["id"], "2"),
+            )
+        try:
+            cliente, _resposta = self.entrar("consulta")
+            html = cliente.get("/conciliacao").get_data(as_text=True)
+            self.assertIn(">Conciliação do caixa<", html)
+            self.assertIn('id="graficoLojas"', html)
+            self.assertIn('id="graficoDias"', html)
+            self.assertIn('id="graficoDif"', html)
+            self.assertIn("valor-barra", html)
+            self.assertIn("Math.max(b.dinheiro, b.saidas) - Math.max(a.dinheiro, a.saidas)", html)
+            self.assertIn("Math.abs(b.valor) - Math.abs(a.valor)", html)
+            self.assertIn("grupo.dinheiro - grupo.saidas", html)
+            self.assertIn("outro.open = false", html)
+            self.assertNotIn("Consultar", html)
+            self.assertIn("COMPRE AQUI | MATRIZ", html)
+            self.assertNotIn("CAUCAIA", html)
+            hoje = date.today()
+            ano = hoje.year if hoje.month >= 7 else hoje.year - 1
+            self.assertIn(f'value="{ano}-07-01"', html)
+        finally:
+            with aplicacao.conectar() as conn:
+                conn.execute("DELETE FROM usuario_lojas WHERE usuario_id = ?", (usuario["id"],))
+
 
 if __name__ == "__main__":
     unittest.main()

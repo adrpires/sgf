@@ -281,6 +281,7 @@ def montar_menu(usuario, ativo=""):
         link("/detalhes", "Detalhes"),
         link("/caixa", "Movimento de caixa"),
         link("/vendas", "Vendas por data"),
+        link("/conciliacao", "Conciliação do caixa"),
         link("/lancamentos", "Relatório de entradas e despesas manual"),
     ]
     if usuario["admin"]:
@@ -1114,6 +1115,7 @@ def responder_painel(pagina):
         + '<a style="color:#fff" href="/detalhes">Detalhes</a>'
         + '<a style="color:#fff" href="/caixa">Movimento de caixa</a>'
         + '<a style="color:#fff" href="/vendas">Vendas por data</a>'
+        + '<a style="color:#fff" href="/conciliacao">Conciliação do caixa</a>'
         + '<a style="color:#fff" href="/senha">Senha</a>'
         + '<form method="post" action="/sair" style="margin:0">'
         + f'<input type="hidden" name="csrf" value="{html.escape(csrf)}">'
@@ -1498,6 +1500,11 @@ def filtrar_vendas(vendas, permitidas):
     ]
 
 
+def inicio_desde_julho(hoje):
+    ano = hoje.year if hoje.month >= 7 else hoje.year - 1
+    return hoje.replace(year=ano, month=7, day=1)
+
+
 def ler_vendas_feito():
     dados = ler_json(CONTROLE / "vendas-feito.json")
     return dados if isinstance(dados, dict) else {}
@@ -1599,6 +1606,30 @@ def vendas_form():
         cobertura_inicio=str(feito.get("inicio") or ""),
         cobertura_fim=str(feito.get("fim") or ""),
         vendas=vendas,
+    )
+
+
+@app.get("/conciliacao")
+def conciliacao():
+    usuario, resposta = exigir_login()
+    if resposta:
+        return resposta
+    vendas_feito = ler_vendas_feito()
+    caixa_feito = ler_caixa_feito()
+    hoje = datetime.now(FORTALEZA).date()
+    return render_template(
+        "conciliacao.html",
+        aviso=session.pop("aviso", ""),
+        inicio=inicio_desde_julho(hoje).isoformat(),
+        fim=hoje.isoformat(),
+        vendas=filtrar_vendas(vendas_feito.get("vendas") or [], acesso_lojas(usuario)),
+        movimentos=filtrar_caixa(caixa_feito.get("movimentos") or [], acesso_lojas(usuario)),
+        vendas_em=texto_fortaleza(vendas_feito.get("geradoEm")),
+        caixa_em=texto_fortaleza(caixa_feito.get("geradoEm")),
+        vendas_inicio=str(vendas_feito.get("inicio") or ""),
+        vendas_fim=str(vendas_feito.get("fim") or ""),
+        caixa_inicio=str(caixa_feito.get("inicio") or ""),
+        caixa_fim=str(caixa_feito.get("fim") or ""),
     )
 
 

@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block titulo %}Conciliação do caixa · SGF{% endblock %}
+{% block titulo_pagina %}Conciliação do caixa{% endblock %}
+{% block corpo %}
+<style>
+  .recortes { display:flex; gap:16px; align-items:flex-end; flex-wrap:nowrap; margin-bottom:16px; }
+  .recortes label { display:flex; flex-direction:column; gap:4px; margin:0; width:auto; color:var(--muted); font-size:13px; }
+  .recortes input[type="date"] { width:auto; }
+  .loja { margin-top:12px; }
+  .loja summary { cursor:pointer; font-weight:700; }
+  .loja table { width:100%; border-collapse:collapse; margin-top:8px; }
+  .loja th, .loja td { border-bottom:1px solid var(--line); padding:6px 8px; text-align:right; white-space:nowrap; }
+  .loja th:first-child, .loja td:first-child { text-align:left; }
+  .loja table tr:nth-child(even) td { background:#e7eef6; }
+  html[data-tema="escuro"] .loja table tr:nth-child(even) td { background:#22344c; }
+  .tabela-rolagem { overflow-x:auto; }
+  .negativo { color:#dc2626; font-weight:700; }
+  .barras { height:320px; align-items:flex-end; overflow-x:auto; }
+  .barras .col { height:auto; min-width:120px; justify-content:flex-end; }
+  .barras .par { height:180px; }
+  .barras .pilha { display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%; gap:4px; }
+  .barras .barra { width:26px; }
+  .valor-barra { font-size:11px; font-weight:800; line-height:1.15; text-align:center; color:var(--ink); white-space:nowrap; }
+  .barras .col span { max-width:120px; text-align:center; font-size:12px; }
+  @media (max-width:800px) {
+    .recortes { flex-wrap:wrap; }
+  }
+</style>
+<main>
+  <p>Cruza o dinheiro das vendas com as saídas em dinheiro do caixa, por loja e por dia. A diferença é o que entrou em dinheiro e ainda não saiu do caixa. O histórico entra desde julho e a data só recorta o que o sincronismo já gravou.</p>
+  {% if aviso %}<div class="aviso">{{ aviso }}</div>{% endif %}
+  <div class="card recortes">
+    <label for="inicio">Data inicial <input id="inicio" type="date" value="{{ inicio }}"></label>
+    <label for="fim">Data final <input id="fim" type="date" value="{{ fim }}"></label>
+  </div>
+  <section class="card">
+    <h2>Dinheiro e saídas por loja</h2>
+    <div class="legenda-manual"><span><i class="ponto entrada"></i>Vendas em dinheiro</span><span><i class="ponto despesa"></i>Saídas em dinheiro</span></div>
+    <div class="barras" id="graficoLojas"></div>
+  </section>
+  <section class="card">
+    <h2>Dinheiro e saídas por dia</h2>
+    <div class="barras" id="graficoDias"></div>
+  </section>
+  <section class="card">
+    <h2>Diferença por loja</h2>
+    <div class="barras" id="graficoDif"></div>
+  </section>
+  <div id="lojasConciliacao"></div>
+  <p>
+    {% if vendas_inicio %}Vendas gravadas de {{ vendas_inicio }} a {{ vendas_fim }}{% if vendas_em %}, leitura {{ vendas_em }}{% endif %}.{% endif %}
+    {% if caixa_inicio %}Caixa gravado de {{ caixa_inicio }} a {{ caixa_fim }}{% if caixa_em %}, leitura {{ caixa_em }}{% endif %}.{% endif %}
+  </p>
+</main>
+<script>
+const VENDAS = {{ vendas|tojson }};
+const MOVIMENTOS = {{ movimentos|tojson }};
+const moeda = new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'});
+let esperaRecorte = null;
+function esc(valor) {
+  return String(valor ?? '').replace(/[&<>"]/g, caractere => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[caractere]));
+}
+function brData(iso) {
+  if (!iso || String(iso).length < 10) return '';
+  return iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4);
+}
+function dentro(item, inicio, fim) {
+  const data = String(item.data || '');
+  return !!inicio && !!fim && inicio <= fim && data >= inicio && data <= fim;
+}
+function moedaDinheiro(moedaCaixa) {
+  const texto = String(moedaCaixa || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+  return !texto || texto.includes('DINH');
+}
+function barrasDuplas(alvo, itens, vazio) {
+  const caixa = document.getElementById(alvo);
+  const ordem = itens.filter(item => item.dinheiro || item.saidas).sort((a, b) => Math.max(b.dinheiro, b.saidas) - Math.max(a.dinheiro, a.saidas) || String(a.nome).localeCompare(String(b.nome), 'pt'));
+  if (!ordem.length) {
+    caixa.innerHTML = '<p>' + vazio + '</p>';
+    return;
+  }
+  const maior = Math.max(1, ...ordem.map(item => Math.max(item.dinheiro, item.saidas)));
+  const pilha = (valor, classe) => {
+    const altura = Math.max(valor ? 4 : 0, Math.round(valor / maior * 140));
+    return '<div class="pilha"><strong class="valor-barra">' + moeda.format(valor) + '</strong><div class="barra ' + classe + '" style="height:' + altura + 'px"></div></div>';
+  };
+  caixa.innerHTML = ordem.map(item => '<div class="col"><div class="par">' + pilha(item.dinheiro, 'entrada') + pilha(item.saidas, 'despesa') + '</div><span>' + esc(item.nome) + '</span></div>').join('');
+}
+function barras(alvo, itens, vazio) {
+  const caixa = document.getElementById(alvo);
+  const ordem = itens.slice().sort((a, b) => Math.abs(b.valor) - Math.abs(a.valor) || String(a.nome).localeCompare(String(b.nome), 'pt'));
+  if (!ordem.length) {
+    caixa.innerHTML = '<p>' + vazio + '</p>';
+    return;
+  }
+  const maior = Math.max(1, ...ordem.map(item => Math.abs(item.valor)));
+  caixa.innerHTML = ordem.map(item => {
+    const altura = Math.max(item.valor ? 4 : 0, Math.round(Math.abs(item.valor) / maior * 140));
+    const classe = item.valor < 0 ? 'despesa' : 'entrada';
+    return '<div class="col"><strong class="valor-barra">' + moeda.format(item.valor) + '</strong><div class="par"><div class="barra ' + classe + '" style="height:' + altura + 'px"></div></div><span>' + esc(item.nome) + '</span></div>';
+  }).join('');
+}
+function desenhar() {
+  const inicio = document.getElementById('inicio').value;
+  const fim = document.getElementById('fim').value;
+  const lojas = new Map();
+  const garantir = (codigo, nome) => {
+    if (!lojas.has(codigo)) lojas.set(codigo, {codigo: codigo, nome: nome || codigo, dinheiro: 0, saidas: 0, outras: 0, dias: new Map(), historicos: new Map()});
+    const grupo = lojas.get(codigo);
+    if (nome) grupo.nome = nome;
+    return grupo;
+  };
+  const diaDe = (grupo, data) => {
+    if (!grupo.dias.has(data)) grupo.dias.set(data, {data: data, dinheiro: 0, saidas: 0});
+    return grupo.dias.get(data);
+  };
+  VENDAS.filter(item => dentro(item, inicio, fim)).forEach(item => {
+    const grupo = garantir(String(item.filial || ''), item.filialNome || '');
+    const valor = Number((item.formas || {}).dinheiro) || 0;
+    grupo.dinheiro += valor;
+    diaDe(grupo, String(item.data || '')).dinheiro += valor;
+  });
+  MOVIMENTOS.filter(item => dentro(item, inicio, fim) && item.tipo === 'saida').forEach(item => {
+    const grupo = garantir(String(item.filial || ''), item.filialNome || '');
+    const valor = Number(item.valor) || 0;
+    const data = String(item.data || '');
+    if (moedaDinheiro(item.moeda)) {
+      grupo.saidas += valor;
+      diaDe(grupo, data).saidas += valor;
+    } else {
+      grupo.outras += valor;
+    }
+    const chave = (item.historico || 'Sem histórico') + '\n' + (item.moeda || 'DINHEIRO');
+    grupo.historicos.set(chave, (grupo.historicos.get(chave) || 0) + valor);
+  });
+  const ordem = [...lojas.values()].filter(grupo => grupo.codigo && (grupo.dinheiro || grupo.saidas || grupo.outras)).sort((a, b) => Math.max(b.dinheiro, b.saidas) - Math.max(a.dinheiro, a.saidas) || String(a.nome).localeCompare(String(b.nome), 'pt'));
+  const dias = new Map();
+  ordem.forEach(grupo => grupo.dias.forEach(dia => {
+    if (!dia.data) return;
+    if (!dias.has(dia.data)) dias.set(dia.data, {nome: brData(dia.data), dinheiro: 0, saidas: 0});
+    const total = dias.get(dia.data);
+    total.dinheiro += dia.dinheiro;
+    total.saidas += dia.saidas;
+  }));
+  barrasDuplas('graficoLojas', ordem, 'Nenhuma venda em dinheiro nem saída de caixa neste recorte.');
+  barrasDuplas('graficoDias', [...dias.values()], 'Nenhum dia neste recorte.');
+  barras('graficoDif', ordem.map(grupo => ({nome: grupo.nome, valor: grupo.dinheiro - grupo.saidas})), 'Nenhuma loja neste recorte.');
+  const caixa = document.getElementById('lojasConciliacao');
+  caixa.innerHTML = ordem.map(grupo => {
+    const diferenca = grupo.dinheiro - grupo.saidas;
+    const linhas = [...grupo.dias.values()].filter(dia => dia.data).sort((a, b) => String(a.data).localeCompare(String(b.data))).map(dia => {
+      const saldo = dia.dinheiro - dia.saidas;
+      return '<tr><td>' + brData(dia.data) + '</td><td>' + moeda.format(dia.dinheiro) + '</td><td>' + moeda.format(dia.saidas) + '</td><td class="' + (saldo < 0 ? 'negativo' : '') + '">' + moeda.format(saldo) + '</td></tr>';
+    }).join('') || '<tr><td colspan="4">Nenhum dia neste recorte.</td></tr>';
+    const saidas = [...grupo.historicos.entries()].sort((a, b) => b[1] - a[1]).map(par => {
+      const partes = par[0].split('\n');
+      return '<tr><td>' + esc(partes[0]) + '</td><td>' + esc(partes[1]) + '</td><td>' + moeda.format(par[1]) + '</td></tr>';
+    }).join('') || '<tr><td colspan="3">Nenhuma saída neste recorte.</td></tr>';
+    const outras = grupo.outras ? ' · Outras saídas ' + moeda.format(grupo.outras) : '';
+    return '<details class="card loja"><summary>' + esc(grupo.nome) + ' · Dinheiro ' + moeda.format(grupo.dinheiro) + ' · Saídas ' + moeda.format(grupo.saidas) + ' · Diferença ' + moeda.format(diferenca) + outras + '</summary>'
+      + '<div class="tabela-rolagem"><table><thead><tr><th>Data</th><th>Vendas em dinheiro</th><th>Saídas em dinheiro</th><th>Diferença</th></tr></thead><tbody>' + linhas + '</tbody></table></div>'
+      + '<div class="tabela-rolagem"><table><thead><tr><th>Histórico da saída</th><th>Moeda</th><th>Valor</th></tr></thead><tbody>' + saidas + '</tbody></table></div></details>';
+  }).join('');
+  caixa.querySelectorAll('details.loja').forEach(detalhe => {
+    detalhe.addEventListener('toggle', function() {
+      if (!detalhe.open) return;
+      caixa.querySelectorAll('details.loja').forEach(outro => {
+        if (outro !== detalhe) outro.open = false;
+      });
+    });
+  });
+}
+function agendar() {
+  clearTimeout(esperaRecorte);
+  esperaRecorte = setTimeout(desenhar, 2000);
+}
+document.getElementById('inicio').addEventListener('input', agendar);
+document.getElementById('fim').addEventListener('input', agendar);
+document.getElementById('inicio').addEventListener('blur', desenhar);
+document.getElementById('fim').addEventListener('blur', desenhar);
+desenhar();
+</script>
+{% endblock %}
